@@ -25,7 +25,7 @@ const setup = async (t, language) => {
 		delete require.cache[path];
 	});
 	const Workshop = require(path);
-	const instance = { fullName: "Genshin Impact", config: { assets: {}, url: { redemption: REDEMPTION_URL } } };
+	const instance = { name: "genshin", fullName: "Genshin Impact", config: { assets: {}, url: { redemption: REDEMPTION_URL } } };
 	instance.redeemCode = (data, code) => Genshin.prototype.redeemCode.call(instance, data, code);
 	return { ...harness, delays, workshop: new Workshop(instance) };
 };
@@ -218,6 +218,40 @@ test("zero-cost cosmetic with empty code is claimed without redemption", async (
 	assert.equal(requests.length, 5);
 	assert.deepEqual(delays, [1000]);
 });
+
+for (const renews of [true, false]) {
+	test(`a real Hilichurl reward alerts only if login recovery fails (${renews})`, async t => {
+		const { workshop, replies, requests } = await setup(t);
+		const rewardAccount = { ...account, platform: "genshin" };
+		const alerts = [];
+		app.Platform = { getForAccount: () => [{ name: "telegram", id: 1, send: async message => alerts.push(message) }]};
+		app.HoyoLab.errorMessage = HoyoLab.errorMessage;
+		let renewals = 0;
+		app.HoyoLab.refreshStoredCookies = async currentCookie => {
+			assert.equal(currentCookie, account.cookie);
+			renewals++;
+			if (renews) {
+				rewardAccount.cookie = cookie.replace("synthetic-cookie", "renewed-cookie");
+			}
+			return renews;
+		};
+		const reward = { award_id: 77, name: "Synthetic Primogems", cost: 10, status: 1 };
+		const exchange = ok({ type: 1, exchange_code: "EVENT_REWARD", award_id: 77 });
+		const loginFailure = { body: { retcode: -100, message: "Sessione scaduta" } };
+		replies.push(info(), ok({ task_list: []}), info(), shop([reward]), exchange, loginFailure, ...(renews ? [ok()] : []));
+		const result = await workshop.run(rewardAccount);
+		assert.equal(result.success, renews, result.message);
+		assert.deepEqual(result.data.codesRedeemed, renews ? ["EVENT_REWARD"] : []);
+		assert.deepEqual(result.data.codesObtained, renews ? [] : ["EVENT_REWARD"]);
+		assert.equal(renewals, 1);
+		assert.equal(alerts.length, renews ? 0 : 1);
+		assert.deepEqual(requests.map(request => request.url.pathname.split("/").at(-1)),
+			["index", "task_list", "index", "exchange_list", "exchange", "webExchangeCdkey", ...(renews ? ["webExchangeCdkey"] : [])]);
+		if (renews) {
+			assert.match(requests.at(-1).headers.cookie, /cookie_token_v2=renewed-cookie/);
+		}
+	});
+}
 
 // Point exchanges remain synthetic regression coverage, not captured success evidence.
 for (const redeem of [true, false]) {

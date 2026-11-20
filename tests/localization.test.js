@@ -445,10 +445,11 @@ test("Gotify localizes validation and delivery failures while preserving notific
 	const config = { id: 1, url: "https://example.com", token: "synthetic-token" };
 	assert.throws(() => new Gotify({ ...config, token: "" }), /Nessun token/);
 	assert.throws(() => new Gotify({ ...config, url: "invalid" }), /URL del server Gotify non valido/);
-	const platform = new Gotify(config);
+	const platform = new Gotify({ ...config, priorities: { giftCodeRedeem: 8, codeRedeem: 7 } });
 	assert.throws(() => platform.prepareMessage(""), /non devono essere vuoti/);
 	assert.throws(() => platform.prepareMessage("Hello", { priority: 1.5 }), /numero intero/);
-	const message = platform.prepareMessage({ title: "External title", description: "External text", fields: []});
+	const message = platform.prepareMessage({ title: "External title", description: "External text", fields: []}, { notificationType: "codeRedeem" });
+	assert.equal(message.priority, 7);
 	assert.equal(message.title, "External title");
 	assert.equal(message.message, "External text");
 	await assert.rejects(platform.send("Hello"), /Invio della notifica Gotify non riuscito/);

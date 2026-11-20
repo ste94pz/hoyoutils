@@ -100,7 +100,7 @@ module.exports = class TearsOfThemis extends require("../template.js") {
 
 	async redeemCode (accountData, code) {
 		const result = await redeemCode(accountData, code);
-		return result.success ? { success: true } : { success: false, message: result.reason };
+		return result.success ? { success: true } : { ...result, message: result.reason };
 	}
 
 	async checkIn (accountData) {

@@ -39,6 +39,7 @@ module.exports = class RedeemCode {
 
 			return {
 				success: false,
+				retcode: res.body.retcode,
 				message: res.body.message
 			};
 		}

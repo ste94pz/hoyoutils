@@ -61,7 +61,7 @@ that are not listed use `priority`.
 ```
 
 Available types: `checkIn`, `codeRedeem`, `cookie`, `dailies`, `expedition`,
-`giftCodeRedeem`, `hilichurl`, `howlScratchCard`, `mimo`, `realmCurrency`,
+`hilichurl`, `howlScratchCard`, `mimo`, `realmCurrency`,
 `shopStatus`, `stamina`, and `weeklies`. `cookie` covers expired login and
 cookie refresh alerts. An unknown type stops the application at startup so typos
 are caught early. The startup test notification always uses `priority`.

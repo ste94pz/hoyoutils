@@ -1,8 +1,9 @@
 const { t } = require("../../localization/index.js");
 const redemptionRequest = require("../redemption-request.js");
+const { isRedemptionLoginExpired, REDEMPTION_GAME_BIZ, savePendingCode } = redemptionRequest;
 const { getLanguage } = require("../../gots/hoyolab-contexts/language.js");
 
-const GAME_BIZ = "nxx_global";
+const GAME_BIZ = REDEMPTION_GAME_BIZ.tot;
 const REGION = "glb_prod_wd01";
 const ROLE_URL = "https://api-account-os.hoyoverse.com/account/binding/api/getUserGameRolesOfRegionByCookieToken";
 const REDEMPTION_URL = "https://public-operation-common.hoyoverse.com/common/apicdkey/api/webExchangeCdkey";
@@ -29,7 +30,11 @@ const getRole = async (account) => {
 	});
 	if (roles.statusCode !== 200 || roles.body?.retcode !== 0) {
 		// Discovery did not evaluate the code: never classify it as a final code error.
-		return { success: false, reason: roles.body?.message || t("Could not load the Tears of Themis character. Please try again later.") };
+		return {
+			success: false,
+			reason: roles.body?.message || t("Could not load the Tears of Themis character. Please try again later."),
+			loginExpired: Boolean(roles.body && isRedemptionLoginExpired(roles.body))
+		};
 	}
 	const list = roles.body.data?.list;
 	const role = Array.isArray(list) && list.find(item => item?.game_biz === GAME_BIZ && item.region === REGION
@@ -43,6 +48,9 @@ const getRole = async (account) => {
 const redeemCode = async (account, code) => {
 	const discovery = await getRole(account);
 	if (!discovery.success) {
+		if (discovery.loginExpired) {
+			await savePendingCode(GAME_BIZ, account, code);
+		}
 		return discovery;
 	}
 	const { role } = discovery;

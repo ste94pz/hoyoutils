@@ -2,6 +2,7 @@ const { normalizeCharacter } = require("./character-selection.js");
 const { t } = require("../localization/index.js");
 
 const { requestPassportRefresh } = require("./passport-request.js");
+const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 
 const DataCache = require("./cache.js");
 const CustomHoyoError = require("./error-messages.js");
@@ -376,6 +377,9 @@ module.exports = class HoyoLab {
 
 	static async refreshCookieAccounts (cookie = null) {
 		const requestedLtuid = cookie ? parseCookie(cookie).ltuid_v2 : null;
+		if (cookie !== null && !requestedLtuid) {
+			return [];
+		}
 		const accounts = new Map();
 		for (const platform of HoyoLab.list) {
 			for (const account of platform.data) {
@@ -467,8 +471,9 @@ module.exports = class HoyoLab {
 		return results.some(result => result.success);
 	}
 
-	static isExpiredLogin (message) {
-		return /(?:please\s+)?log\s*in|login/i.test(String(message ?? ""));
+	static hasRefreshCookie (cookie) {
+		const ltuid = cookie && parseCookie(cookie).ltuid_v2;
+		return Boolean(ltuid) && HoyoLab.list.some(platform => platform.data.some(account => account.ltuid === ltuid && account.refreshCookie));
 	}
 
 	update (account) {
@@ -526,7 +531,7 @@ module.exports = class HoyoLab {
 			};
 		}
 
-		const disabled = accountData.every(account => account.redeemCode === false);
+		const disabled = accountData.every(account => account.redeemCode === false && !canRestoreRedemption(account));
 		if (disabled) {
 			return {
 				success: false,
@@ -542,10 +547,7 @@ module.exports = class HoyoLab {
 			return { success: false, data: { reason: t("No linked Tears of Themis character found. Link your game character to this HoYoverse account first.") } };
 		}
 
-		let res = await platform.redeemCode(account, code);
-		if (!res.success && HoyoLab.isExpiredLogin(res.message) && await HoyoLab.refreshStoredCookies(account.cookie)) {
-			res = await platform.redeemCode(account, code);
-		}
+		const res = await redeemWithRefresh(account, code, () => platform.redeemCode(account, code));
 		if (res.success) {
 			return { success: true };
 		}

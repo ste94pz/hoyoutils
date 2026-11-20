@@ -223,6 +223,17 @@ test("different accounts can refresh independently while one request is pending"
 	assert.equal(await first, true);
 });
 
+test("a targeted refresh without an account ID does not refresh other accounts", async t => {
+	await setup(t);
+	let calls = 0;
+	registerAccounts(t, async () => {
+		calls++;
+		return { success: false };
+	});
+	assert.equal(await HoyoLab.refreshStoredCookies("cookie_token_v2=synthetic"), false);
+	assert.equal(calls, 0);
+});
+
 for (const throws of [false, true]) {
 	test(`Concurrent refresh ${throws ? "exceptions" : "refusals"} preserve the last success and allow retry`, async t => {
 		const { saved } = await setup(t);

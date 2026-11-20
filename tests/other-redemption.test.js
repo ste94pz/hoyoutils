@@ -115,7 +115,7 @@ for (const [game, definition] of Object.entries(games)) {
 				harness.replies.push(...Array.from({ length: retcode === -2016 ? 3 : 1 }, () => ({ body: { retcode, message: "Synthetic API failure" } })));
 				const result = await invoke(game, caller, getAccount());
 				assert.deepEqual(result, caller === "module"
-					? { success: false, message: "Synthetic API failure" }
+					? { success: false, retcode, message: "Synthetic API failure" }
 					: { success: false, reason: retcode === -2001 ? "Expired or invalid code" : "Synthetic API failure", retcode });
 				assert.equal(harness.requests.length, retcode === -2016 ? 3 : 1);
 			});

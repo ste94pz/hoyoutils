@@ -12,6 +12,7 @@ const { t } = require("../localization/index.js");
 
 const { setTimeout: sleep } = require("node:timers/promises");
 const { buildMimoRequest } = require("./mimo-request.js");
+const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 
 // Task status enum matching HoYoLab API
 const MimoTaskStatus = {
@@ -754,6 +755,28 @@ module.exports = class TravelingMimo {
 		item.exhausted = true;
 	}
 
+	async #redeemReward (account, code, results, lottery = false) {
+		const tag = `${this.#instance.fullName}:Mimo`;
+		const preference = lottery ? account.mimo?.redeemDraw : account.mimo?.redeem;
+		if (preference === false || !(account.redeemCode || canRestoreRedemption(account))) {
+			results.codesObtained.push(code);
+			if (!lottery) {
+				app.Logger.info(tag, t `(${account.uid}) Code obtained (not auto-redeemed): ${code}`);
+			}
+			return;
+		}
+		const result = await redeemWithRefresh(account, code, () => this.#instance.redeemCode(account, code), { automatic: true });
+		if (result.success) {
+			results.codesRedeemed.push(code);
+			app.Logger.info(tag, lottery ? t `(${account.uid}) Redeemed lottery code: ${code}` : t `(${account.uid}) Redeemed code: ${code}`);
+			return;
+		}
+		if (result.loginExpired) {
+			results.codesObtained.push(code);
+		}
+		results.errors.push(lottery ? t `Failed to redeem lottery code ${code}: ${result.message}` : t `Failed to redeem code ${code}: ${result.message}`);
+	}
+
 	async run (accountData) {
 		const runKey = `${this.#gameId}:${accountData.uid}`;
 		if (RunningAccounts.has(runKey)) {
@@ -957,24 +980,7 @@ module.exports = class TravelingMimo {
 
 					app.Logger.info(`${this.#instance.fullName}:Mimo`, t `(${accountData.uid}) Exchanged ${item.name} for code: ${code}`);
 
-					// Check if auto-redeem is enabled (mimo.redeem defaults to true for backward compatibility)
-					const shouldRedeem = accountData.redeemCode && (accountData.mimo?.redeem !== false);
-
-					if (shouldRedeem) {
-						const redeemResult = await this.#instance.redeemCode(accountData, code);
-						if (redeemResult.success) {
-							results.codesRedeemed.push(code);
-							app.Logger.info(`${this.#instance.fullName}:Mimo`, t `(${accountData.uid}) Redeemed code: ${code}`);
-						}
-						else {
-							results.errors.push(t `Failed to redeem code ${code}: ${redeemResult.message}`);
-						}
-					}
-					else {
-						// Code obtained but not auto-redeemed
-						results.codesObtained.push(code);
-						app.Logger.info(`${this.#instance.fullName}:Mimo`, t `(${accountData.uid}) Code obtained (not auto-redeemed): ${code}`);
-					}
+					await this.#redeemReward(accountData, code, results);
 				}
 
 				await app.Utils.waitWithJitter(1500);
@@ -1072,20 +1078,7 @@ module.exports = class TravelingMimo {
 					app.Logger.info(`${this.#instance.fullName}:Mimo`, t `(${accountData.uid}) Lottery draw: ${drawResult.data.name}`);
 
 					if (drawResult.data.code) {
-						const shouldRedeemDraw = accountData.redeemCode && (accountData.mimo?.redeemDraw !== false);
-						if (shouldRedeemDraw) {
-							const redeemResult = await this.#instance.redeemCode(accountData, drawResult.data.code);
-							if (redeemResult.success) {
-								results.codesRedeemed.push(drawResult.data.code);
-								app.Logger.info(`${this.#instance.fullName}:Mimo`, t `(${accountData.uid}) Redeemed lottery code: ${drawResult.data.code}`);
-							}
-							else {
-								results.errors.push(t `Failed to redeem lottery code ${drawResult.data.code}: ${redeemResult.message}`);
-							}
-						}
-						else {
-							results.codesObtained.push(drawResult.data.code);
-						}
+						await this.#redeemReward(accountData, drawResult.data.code, results, true);
 					}
 
 					await app.Utils.waitWithJitter(1500);

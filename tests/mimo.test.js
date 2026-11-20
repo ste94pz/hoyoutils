@@ -203,6 +203,24 @@ test("failed draw stops lottery and failed exchange does not emit a code", async
 	assert.deepEqual(result.data.lotteryDraws, []);
 });
 
+test("Mimo exposes an earned code if credentials cannot be renewed before redemption", async t => {
+	const { mimo, redeemed } = await setup(t);
+	flow(mimo);
+	mimo.getShopItems = async () => ({ success: true, data: [{ id: 7, name: "Stellar Jade", cost: 25, status: 1 }]});
+	mimo.exchangeItem = async () => ({ success: true, data: { code: "synthetic-code" } });
+	app.HoyoLab.hasRefreshCookie = () => true;
+	let renewals = 0;
+	app.HoyoLab.refreshStoredCookies = async () => {
+		renewals++;
+		return false;
+	};
+	const entry = { ...account, platform: "starrail", redemptionDeviceUuid: "synthetic-device", redeemCode: false, redeemCodeConfigured: true };
+	const result = await mimo.run(entry);
+	assert.equal(renewals, 1);
+	assert.deepEqual(redeemed, []);
+	assert.deepEqual(result.data.codesObtained, ["synthetic-code"]);
+});
+
 test("upstream shop policy reserves unavailable guaranteed rewards and saves its plan", async t => {
 	const { mimo } = await setup(t);
 	flow(mimo, 25);

@@ -61,7 +61,6 @@
         dailiesReminderMinute: 0, // 0-59
         dailiesReminderTimeZone: null, // Optional IANA timezone, e.g. 'America/New_York'; null uses game server time
         expedition: { mode: 'cron', expression: '0 */30 * * * *' },
-        giftCodeRedeem: { mode: 'cron', expression: '0 */3 * * *' },
         mimo: { mode: 'cron', expression: '0 0 */6 * * *' },
         mimoRestock: true, // Also run at 19:00 and 19:01 UTC+8 on Monday (Star Rail) / Wednesday (ZZZ).
         mimoJitter: 0, // Random delay in seconds before running Mimo (0-N). Helps avoid rate limits at reset time.

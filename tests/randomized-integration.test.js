@@ -49,12 +49,14 @@ const initialize = (crons, definitions = {}) => {
 test("legacy strings and cron mode preserve fixed definitions and overrides", () => {
 	for (const checkIn of ["0 0 1 * * *", { mode: "cron", expression: "0 0 1 * * *" }]) {
 		const result = initialize({ checkIn });
-		assert.equal(result.fixed.length, 14);
+		assert.equal(result.fixed.length, 13);
 		assert.equal(result.fixed[0].expression, "0 0 1 * * *");
 		assert.ok(result.fixed.every(job => job.started));
 		assert.equal(result.fixed[0].code(), "existing code");
 	}
-	assert.equal(initialize({}).fixed.length, 14);
+	assert.equal(initialize({}).fixed.length, 13);
+	assert.equal(initialize({ giftCodeRedeem: { mode: "retired" }, blacklist: ["gift-code-redeem"]}).fixed.length, 13);
+	assert.equal(initialize({ whitelist: ["gift-code-redeem"]}).fixed.length, 0);
 	assert.throws(() => initialize({ expedition: { mode: "interval", min: "299s", max: "1h" } }), /crons.expedition:.*at least 5 minutes/);
 	assert.equal(initialize({ checkIn: "" }).fixed[0].expression, "0 * * * * *");
 });
@@ -62,22 +64,22 @@ test("legacy strings and cron mode preserve fixed definitions and overrides", ()
 test("randomized modes replace selected crons and respect existing filters", () => {
 	const settings = { checkIn: { mode: "interval", min: "30m", max: "1h" } };
 	const result = initialize(settings);
-	assert.equal(result.fixed.length, 13);
+	assert.equal(result.fixed.length, 12);
 	assert.ok(result.jobs[0].job instanceof schedulerModule.RandomizedScheduler);
 	assert.equal(result.jobs[0].job.stopped, true); // Started only after clients initialize.
 	assert.equal(result.jobs[0].job.code(), "existing code");
-	assert.equal(initialize({ ...settings, blacklist: ["check-in"]}).jobs.length, 13);
+	assert.equal(initialize({ ...settings, blacklist: ["check-in"]}).jobs.length, 12);
 	assert.equal(initialize({ ...settings, whitelist: ["expedition"]}).fixed.length, 1);
 	assert.throws(() => initialize({ blacklist: ["check-in"], whitelist: ["expedition"]}));
 	assert.throws(() => initialize({ checkIn: { mode: "unknown" } }), /mode must be/);
 	assert.throws(() => initialize({ randomization: settings }), /Move crons.randomization/);
-	assert.equal(initialize({ checkIn: { mode: "daily-window", start: "23:00", end: "01:00" } }).fixed.length, 13);
+	assert.equal(initialize({ checkIn: { mode: "daily-window", start: "23:00", end: "01:00" } }).fixed.length, 12);
 });
 
 test("default config uses cron objects with unchanged expressions", () => {
 	const config = JSON5.parse(fs.readFileSync(path.join(__dirname, "../default.config.json5"), "utf8"));
 	const result = initialize(config.crons);
-	assert.equal(result.fixed.length, 14);
+	assert.equal(result.fixed.length, 13);
 	assert.equal(result.fixed[0].expression, "0 0 0 * * *");
 	assert.equal(result.fixed[3].expression, "0 */30 * * * *");
 	assert.equal(Object.hasOwn(config.crons, "randomization"), false);
@@ -87,7 +89,7 @@ test("excluded jobs do not validate their unused schedules or jitter", () => {
 	const invalidSchedules = ["invalid", { mode: "unknown" }, { mode: "interval", min: "1s", max: "1h" }];
 	for (const checkIn of invalidSchedules) {
 		assert.equal(initialize({ whitelist: ["expedition"], checkIn }).jobs.length, 1);
-		assert.equal(initialize({ blacklist: ["check-in"], checkIn }).jobs.length, 13);
+		assert.equal(initialize({ blacklist: ["check-in"], checkIn }).jobs.length, 12);
 		assert.throws(() => initialize({ checkIn }), /crons.checkIn/);
 	}
 	assert.equal(initialize({ whitelist: ["expedition"], mimo: { mode: "interval", min: "30m", max: "1h" }, mimoJitter: 10 }).jobs.length, 1);
@@ -146,11 +148,12 @@ test("setup exports imported advanced cron settings and clears them on a new imp
 		mimo: { mode: "cron", expression: "0 0 */6 * * *" },
 		futureOption: { keep: true }
 	};
-	context.applyCronConfig(crons);
+	context.applyCronConfig({ ...crons, giftCodeRedeem: "0 */3 * * *" });
 	context.generateConfig();
 	for (const [key, value] of Object.entries(crons)) {
 		assert.deepEqual(exported.crons[key], value);
 	}
+	assert.equal(Object.hasOwn(exported.crons, "giftCodeRedeem"), false);
 	context.applyCronConfig({});
 	context.generateConfig();
 	assert.equal(exported.crons.expedition.mode, "cron");

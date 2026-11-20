@@ -7,7 +7,6 @@ const CheckIn = require("./check-in/index.js");
 const CodeRedeem = require("./code-redeem/index.js");
 const DailiesReminder = require("./dailies-reminder/index.js");
 const Expedition = require("./expedition/index.js");
-const GiftCodeRedeem = require("./gift-code-redeem/index.js");
 const Hilichurl = require("./hilichurl/index.js");
 const HowlScratchCard = require("./howl-scratch-card/index.js");
 const Mimo = require("./mimo/index.js");
@@ -25,7 +24,6 @@ const definitions = [
 	CodeRedeem,
 	DailiesReminder,
 	Expedition,
-	GiftCodeRedeem,
 	Hilichurl,
 	HowlScratchCard,
 	Mimo,

@@ -1,15 +1,16 @@
 const redemptionRequest = require("./redemption-request.js");
+const { REDEMPTION_GAME_BIZ } = redemptionRequest;
 const { getLanguageOnly } = require("../gots/hoyolab-contexts/language.js");
 
 const MISSING_DEVICE_MESSAGE = "Missing _MHYUUID required for browser redemption. Please configure a newly acquired cookie.";
 
 const GAME_CONTRACTS = {
 	starrail: {
-		gameBiz: "hkrpg_global",
+		gameBiz: REDEMPTION_GAME_BIZ.starrail,
 		origin: "https://hsr.hoyoverse.com"
 	},
 	zenless: {
-		gameBiz: "nap_global",
+		gameBiz: REDEMPTION_GAME_BIZ.nap,
 		origin: "https://zenless.hoyoverse.com"
 	}
 };

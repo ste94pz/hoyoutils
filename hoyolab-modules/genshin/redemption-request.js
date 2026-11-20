@@ -13,7 +13,7 @@ const requestRedemption = (accountData, code, url = REDEMPTION_URL, options = {}
 		region: accountData.region,
 		lang: getLanguageOnly(),
 		cdkey: code,
-		game_biz: "hk4e_global",
+		game_biz: redemptionRequest.REDEMPTION_GAME_BIZ.genshin,
 		// The gift page sends this separately from its selected short language.
 		sLangKey: "en-us"
 	},

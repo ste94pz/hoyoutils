@@ -11,7 +11,6 @@ const NOTIFICATION_TYPES = [
 	"cookie",
 	"dailies",
 	"expedition",
-	"giftCodeRedeem",
 	"hilichurl",
 	"howlScratchCard",
 	"mimo",
@@ -56,7 +55,9 @@ module.exports = class Gotify extends require("./template.js") {
 		if (typeof priorities !== "object" || Array.isArray(priorities)) {
 			throw new app.Error({ message: t("Gotify priorities must be an object of notification types and priorities.") });
 		}
-		for (const [type, priority] of Object.entries(priorities)) {
+		this.#priorities = { ...priorities };
+		delete this.#priorities.giftCodeRedeem;
+		for (const [type, priority] of Object.entries(this.#priorities)) {
 			if (!NOTIFICATION_TYPES.includes(type)) {
 				throw new app.Error({
 					message: t `Unknown Gotify notification type "${type}".`,
@@ -67,7 +68,6 @@ module.exports = class Gotify extends require("./template.js") {
 				throw new app.Error({ message: t("Gotify priority must be an integer.") });
 			}
 		}
-		this.#priorities = { ...priorities };
 
 		serverURL.pathname = `${serverURL.pathname.replace(/\/+$/, "")}/message`;
 		this.#messageURL = serverURL.toString();

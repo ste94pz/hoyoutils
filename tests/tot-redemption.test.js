@@ -4,7 +4,9 @@ const { createRedemptionHarness } = require("./helpers/http.js");
 const HoyoLab = require("../hoyolab-modules/template.js");
 const TearsOfThemis = require("../hoyolab-modules/termis/index.js");
 const { redeemCodes } = require("../crons/code-redeem/tot.js");
-const { checkAndRedeem, buildMessage, getRedemptionCookieHash } = require("../crons/code-redeem/utils.js");
+const { checkAndRedeem } = require("../crons/code-redeem/utils.js");
+const { buildMessage } = require("../hoyolab-modules/redemption-notification.js");
+const { getRedemptionCookieHash } = require("../hoyolab-modules/redemption-request.js");
 const { getPendingCodes } = require("../hoyolab-modules/redemption-request.js");
 const { REGION, GAME_BIZ, ROLE_URL, REDEMPTION_URL } = require("../hoyolab-modules/termis/redemption-request.js");
 const redeemCommand = require("../commands/redeem/index.js");
@@ -232,6 +234,8 @@ test("manual ToT lookup failure is returned to the command without redemption", 
 
 test("manual ToT login expiration uses the shared cookie-refresh retry", async (t) => {
 	const harness = await setupManual(t);
+	let alerts = 0;
+	app.Platform = { getForAccount: () => [{ name: "telegram", id: 1, send: async () => alerts++ }]};
 	let refreshes = 0;
 	t.mock.method(HoyoLab, "refreshStoredCookies", async currentCookie => {
 		assert.equal(currentCookie, harness.loggedIn.cookie);
@@ -242,6 +246,27 @@ test("manual ToT login expiration uses the shared cookie-refresh retry", async (
 	assert.equal((await redeemCommand.run({}, "tot", role.game_uid, code.code)).success, true);
 	assert.equal(refreshes, 1);
 	assert.equal(harness.requests.length, 3);
+	assert.equal(alerts, 0);
+});
+
+test("manual ToT login failure alerts the account's allowed destinations once", async t => {
+	const harness = await setupManual(t);
+	const alerts = [];
+	app.Platform = {
+		getForAccount: selected => {
+			assert.equal(selected, harness.loggedIn);
+			return [{ name: "webhook", id: 1, createUserMention: () => "<@7>", send: async (embed, options) => alerts.push({ embed, options }) }];
+		}
+	};
+	const failure = { body: { retcode: -100, message: "Please log in" } };
+	harness.replies.push(failure, failure);
+	assert.equal((await redeemCommand.run({}, "tot", role.game_uid, code.code)).success, false);
+	assert.equal((await redeemCommand.run({}, "tot", role.game_uid, code.code)).success, false);
+	assert.equal(harness.requests.length, 2);
+	assert.equal(alerts.length, 1);
+	assert.deepEqual(await getPendingCodes(GAME_BIZ, harness.loggedIn), [code.code]);
+	assert.deepEqual(alerts[0].options, { content: "<@7>", notificationType: "cookie" });
+	assert.match(alerts[0].embed.description, /HoYoLAB Login Expired/);
 });
 
 test("manual ToT temporary failures are retried by the automatic queue with shared cooldown", async (t) => {
@@ -329,7 +354,7 @@ test("ToT keeps existing completed, pending and login-pause cache keys while rep
 	await app.Cache.set({ key: "redemption:pending:nxx_global:Global:1001", value: [code.code]});
 	assert.deepEqual(await getPendingCodes(GAME_BIZ, harness.loggedIn), [code.code]);
 	const cookieHash = getRedemptionCookieHash(harness.loggedIn);
-	await app.Cache.set({ key: "tot-code:Global:1001:expired-login", value: cookieHash });
+	await app.Cache.set({ key: "tot-code:Global:1001:expired-login", value: { cookieHash, retryAt: Date.now() + 60_000 } });
 	assert.ok((await checkAndRedeem({ tot: []})).failed.some(entry => entry.loginExpired));
 	assert.equal(harness.requests.length, 0);
 	await app.Cache.delete("tot-code:Global:1001:expired-login");

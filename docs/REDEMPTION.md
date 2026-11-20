@@ -9,9 +9,29 @@ observed gift-page requests. Existing account eligibility and code-cache
 behavior are preserved.
 
 Public codes, event rewards, and manual redemptions share a per-account cooldown
-queue. Temporary failures leave reward and manual codes pending for the
-code-redemption job to retry while `redeemCode` is enabled, including when no
-new public codes are available.
+queue. Temporary request failures leave reward and manual codes pending for the
+`code-redeem` job to retry while `redeemCode` is enabled, including when no new
+public codes are available.
+
+When a code is submitted and the gift service requests login, HoYoUtils uses
+the configured `stoken` to renew credentials and retries that redemption once.
+This applies to commands, public codes, and event rewards. A configured
+`redeemCode: true` account with missing redemption credentials can also renew
+when a code is available. If renewal is unavailable, update the configured
+cookie. Old authentication pauses are reconsidered when a code is pending.
+If recovery fails, automatic attempts for public codes and event rewards wait
+30 minutes before using the same cookie again. Updated credentials or an
+explicit `/redeem` command can trigger an earlier attempt.
+
+If a real redemption still needs login after recovery, HoYoUtils sends a cookie
+alert to the account's allowed Telegram, Discord webhook, and Gotify
+destinations. Each destination receives one alert per account and rejected
+redemption cookie, even if more codes or redemption paths encounter it.
+
+The periodic `gift-code-redeem` job has been removed. Legacy schedule and
+Gotify priority entries are ignored. If you use a cron allowlist, include
+`code-redeem` to enable automatic redemption and pending-code retries.
+Permanent codes can be submitted with `/redeem`.
 
 Already-redeemed and usage-limit notifications show the result without
 suggesting manual redemption.

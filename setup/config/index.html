@@ -884,7 +884,6 @@
             checkIn: '0 0 0 * * *',
             codeRedeem: '*/15 * * * *',
             expedition: '0 */30 * * * *',
-            giftCodeRedeem: '0 */3 * * *',
             mimo: '0 0 */6 * * *',
             hilichurl: '0 0 11 * * *',
             missedCheckIn: '0 0 23 * * *',
@@ -957,6 +956,7 @@
 
         function exportCronConfig() {
             const crons = { ...importedCrons };
+            delete crons.giftCodeRedeem;
             for (const name of Object.keys(cronDefaults)) {
                 const mode = document.getElementById(`${name}Mode`).value;
                 if (mode === 'cron') {

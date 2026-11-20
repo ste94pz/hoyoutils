@@ -203,6 +203,7 @@ test("Mimo and Hilichurl retain operation order while applying jitter to cooldow
 		const events = [];
 		globalThis.app = {
 			Logger: { info: () => {} },
+			Cache: { get: async () => undefined },
 			Utils: { waitWithJitter: async minimum => events.push(minimum) }
 		};
 		const Module = require(modulePath);
@@ -240,6 +241,7 @@ test("Hilichurl timed tasks wait for read time before completing and claiming", 
 		const events = [];
 		globalThis.app = {
 			Logger: { info: () => {} },
+			Cache: { get: async () => undefined },
 			Utils: { waitWithJitter: async minimum => events.push(minimum) }
 		};
 		const Module = require(modulePath);
@@ -270,40 +272,32 @@ test("Hilichurl timed tasks wait for read time before completing and claiming", 
 	}
 });
 
-test("redemption callers retain codes and account order while cooldowns belong to the shared queue", async () => {
-	for (const filename of ["../crons/code-redeem/utils.js", "../crons/gift-code-redeem/index.js"]) {
-		const events = [];
-		const accounts = [1, 2].map(uid => ({ platform: "genshin", region: "os_euro", uid, redeemCode: true }));
-		const cache = new Map([["genshin-code", ["OLD"]]]);
-		const app = {
-			Utils: { waitWithJitter: async minimum => events.push(minimum) },
-			Cache: { get: async key => cache.get(key), set: async ({ key, value }) => cache.set(key, value), delete: async key => cache.delete(key) },
-			HoyoLab: { getActiveAccounts: ({ whitelist }) => whitelist === "genshin" ? accounts : [], isExpiredLogin: () => false }
-		};
-		globalThis.app = app;
-		const absolute = path.join(__dirname, filename);
-		const nativeRequire = createRequire(absolute);
-		const context = { module: { exports: {} },
-			app,
-			require: name => {
-				if (name === "./genshin" || name === "../code-redeem/genshin.js") {
-					return { redeemCodes: async (account, code) => {
-						events.push([account.uid, code.code]);
-						return { success: true };
-					} };
-				}
-				return nativeRequire(name);
-			} };
-		vm.runInNewContext(fs.readFileSync(absolute, "utf8"), context);
-		if (filename.includes("gift-code")) {
-			await context.module.exports.code();
-			assert.deepEqual(events, [[1, "GENSHINGIFT"], 6000, [2, "GENSHINGIFT"], 6000]);
-		}
-		else {
-			await context.module.exports.checkAndRedeem({ genshin: [{ code: "EXAMPLE" }]});
-			assert.deepEqual(events, [[1, "EXAMPLE"], [2, "EXAMPLE"]]);
-		}
-	}
+test("public redemption retains codes and account order while cooldowns belong to the shared queue", async () => {
+	const events = [];
+	const accounts = [1, 2].map(uid => ({ platform: "genshin", region: "os_euro", uid, redeemCode: true }));
+	const cache = new Map([["genshin-code", ["OLD"]]]);
+	const app = {
+		Utils: { waitWithJitter: async minimum => events.push(minimum) },
+		Cache: { get: async key => cache.get(key), set: async ({ key, value }) => cache.set(key, value), delete: async key => cache.delete(key) },
+		HoyoLab: { getActiveAccounts: ({ whitelist }) => whitelist === "genshin" ? accounts : [], isExpiredLogin: () => false }
+	};
+	globalThis.app = app;
+	const absolute = path.join(__dirname, "../crons/code-redeem/utils.js");
+	const nativeRequire = createRequire(absolute);
+	const context = { module: { exports: {} },
+		app,
+		require: name => {
+			if (name === "./genshin") {
+				return { redeemCodes: async (account, code) => {
+					events.push([account.uid, code.code]);
+					return { success: true };
+				} };
+			}
+			return nativeRequire(name);
+		} };
+	vm.runInNewContext(fs.readFileSync(absolute, "utf8"), context);
+	await context.module.exports.checkAndRedeem({ genshin: [{ code: "EXAMPLE" }]});
+	assert.deepEqual(events, [[1, "EXAMPLE"], [2, "EXAMPLE"]]);
 });
 
 test("Mimo exchanges without codes and refreshed lottery state keep jittered operation pauses", async () => {

@@ -12,6 +12,7 @@ const { t } = require("../localization/index.js");
 const { setTimeout: sleep } = require("node:timers/promises");
 const { getLanguage } = require("../gots/hoyolab-contexts/language.js");
 const { APP_VERSION } = require("../gots/hoyolab-contexts/constants.js");
+const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 const HILICHURL_BASE_URL = "https://sg-public-api.hoyolab.com/event/e2023mimotravel/qiuqiu";
 
 // Task status enum matching HoYoLab API
@@ -382,21 +383,20 @@ module.exports = class HilichurlWorkshop {
 		};
 
 		const attempt = async (stage, operation, safeMessage = false) => {
-			let detail;
+			let result;
 			try {
-				const result = await operation();
+				result = await operation();
 				if (result.success) {
 					return result;
 				}
-				detail = safeMessage ? result.message : undefined;
 			}
 			catch {
 				// Transport errors may contain authenticated request options.
 			}
-			const message = detail || t `Hilichurl operation failed: ${stage}`;
+			const message = (safeMessage && result?.message) || t `Hilichurl operation failed: ${stage}`;
 			results.errors.push(message);
 			app.Logger.warn(`${this.#instance.fullName}:Hilichurl`, message);
-			return { success: false, message };
+			return { success: false, message, loginExpired: result?.loginExpired };
 		};
 
 		const gameInfo = await attempt("index", () => this.getGameInfo(accountData));
@@ -504,13 +504,18 @@ module.exports = class HilichurlWorkshop {
 					app.Logger.info(`${this.#instance.fullName}:Hilichurl`, t `(${accountData.uid}) Exchanged ${item.name}${code ? t ` for code: ${code}` : ""}`);
 
 					// Check if auto-redeem is enabled (hilichurl.redeem defaults to true for backward compatibility)
-					const shouldRedeem = accountData.redeemCode && (accountData.hilichurl?.redeem !== false);
+					const shouldRedeem = accountData.hilichurl?.redeem !== false && (accountData.redeemCode || canRestoreRedemption(accountData));
 
 					if (code && shouldRedeem) {
-						const redeemResult = await attempt("redeem_code", () => this.#instance.redeemCode(accountData, code));
+						const redeemResult = await attempt("redeem_code", () => redeemWithRefresh(
+							accountData, code, () => this.#instance.redeemCode(accountData, code), { automatic: true }
+						));
 						if (redeemResult.success) {
 							results.codesRedeemed.push(code);
 							app.Logger.info(`${this.#instance.fullName}:Hilichurl`, t `(${accountData.uid}) Redeemed code: ${code}`);
+						}
+						else if (redeemResult.loginExpired) {
+							results.codesObtained.push(code);
 						}
 					}
 					else if (code) {

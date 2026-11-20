@@ -233,7 +233,7 @@ for (const game of ["genshin", "starrail", "nap", "tot"]) {
 	for (const retcode of [-2006, -2017, -2011, undefined]) {
 		test(`${game}: redemption notification manual link for retcode ${retcode}`, () => {
 			const h = harness();
-			const { buildMessage } = h.load("crons/code-redeem/utils.js");
+			const { buildMessage } = h.load("hoyolab-modules/redemption-notification.js");
 			const reason = "Synthetic backend reason";
 			const message = buildMessage("failed", {
 				account: { ...account, platform: game },
