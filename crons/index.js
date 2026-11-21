@@ -50,10 +50,8 @@ const initCrons = () => {
 	if (config.crons.randomization !== undefined) {
 		throw new Error("Move crons.randomization entries directly to crons.<name> and remove enabled; select mode: cron to use a fixed schedule");
 	}
-	const schedules = new Map();
-	const selectedDefinitions = definitions.filter(definition => !blacklist.includes(definition.name)
-		&& (whitelist.length === 0 || whitelist.includes(definition.name)));
-	for (const definition of selectedDefinitions) {
+	const selected = definitions.filter(definition => !blacklist.includes(definition.name)
+		&& (whitelist.length === 0 || whitelist.includes(definition.name))).map(definition => {
 		const name = app.Utils.convertCase(definition.name, "kebab", "camel");
 		const value = config.crons[name];
 		if (FixedScheduleCrons.includes(definition.name)) {
@@ -61,20 +59,19 @@ const initCrons = () => {
 				throw new Error(`crons.${name}: this job uses a built-in fixed schedule and does not support schedule objects`);
 			}
 			// Legacy overrides for these jobs were ignored; retain that behavior.
-			continue;
+			return { definition, name };
 		}
 		// Existing strings (including empty fallback values) retain their behavior.
 		const options = !value || typeof value === "string"
 			? { mode: "cron", expression: value || definition.expression }
 			: value;
 		validate(name, options, config.crons);
-		schedules.set(name, options);
-	}
+		return { definition, name, options };
+	});
 
 	const crons = [];
-	for (const definition of selectedDefinitions) {
-		if (FixedScheduleCrons.includes(definition.name)) {
-			const name = app.Utils.convertCase(definition.name, "kebab", "camel");
+	for (const { definition, name, options } of selected) {
+		if (!options) {
 			const job = new CronJob(definition.expression, () => definition.code(), null, false, definition.timeZone);
 			job.start();
 			crons.push({ name, job });
@@ -87,32 +84,27 @@ const initCrons = () => {
 			code: definition.code
 		};
 
-		for (const schedule of definition.additionalSchedules || []) {
+		const additionalJobs = (definition.additionalSchedules || []).map(schedule => {
 			const additionalJob = new CronJob(schedule.expression, () => cron.code({ ...cron, ...schedule }), null, false, schedule.timeZone);
 			additionalJob.start();
-		}
+			return additionalJob;
+		});
 
-		const randomizedName = app.Utils.convertCase(definition.name, "kebab", "camel");
-		if (schedules.get(randomizedName).mode !== "cron") {
-			const job = new RandomizedScheduler({
-				name: randomizedName,
-				options: schedules.get(randomizedName),
+		let job;
+		if (options.mode === "cron") {
+			job = new CronJob(options.expression, () => cron.code(cron), null, false, definition.timeZone);
+			job.start();
+		}
+		else {
+			job = new RandomizedScheduler({
+				name,
+				options,
 				code: () => cron.code(cron),
 				cache: app.Cache,
 				logger: app.Logger
 			});
-			crons.push({ ...cron, job });
-			continue;
 		}
-
-		const name = app.Utils.convertCase(definition.name, "kebab", "camel");
-
-		const expression = schedules.get(name).expression;
-		const job = new CronJob(expression, () => cron.code(cron), null, false, definition.timeZone);
-		job.start();
-
-		crons.job = job;
-		crons.push(cron);
+		crons.push({ ...cron, job, additionalJobs });
 	}
 
 	app.Logger.info("Cron", t `Initialized ${crons.length} cron jobs`);

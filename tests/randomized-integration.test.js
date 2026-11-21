@@ -25,9 +25,12 @@ const initialize = (crons, definitions = {}) => {
 					constructor (expression, code, onComplete, start, timeZone) {
 						Object.assign(this, { expression, code, timeZone });
 						fixed.push(this);
+						if (start) {
+							this.start();
+						}
 					}
 
-					start () { this.started = true; }
+					start () { this.starts = (this.starts ?? 0) + 1; }
 				} };
 			}
 			if (name === "../config.js") {
@@ -51,14 +54,75 @@ test("legacy strings and cron mode preserve fixed definitions and overrides", ()
 		const result = initialize({ checkIn });
 		assert.equal(result.fixed.length, 13);
 		assert.equal(result.fixed[0].expression, "0 0 1 * * *");
-		assert.ok(result.fixed.every(job => job.started));
+		assert.ok(result.fixed.every(job => job.starts === 1));
 		assert.equal(result.fixed[0].code(), "existing code");
+		assert.equal(result.jobs[0].name, "check-in");
+		assert.equal(result.jobs[0].job, result.fixed[0]);
+		assert.deepEqual(Array.from(result.jobs, entry => entry.job), result.fixed);
+		assert.equal(Object.hasOwn(result.jobs, "job"), false);
 	}
 	assert.equal(initialize({}).fixed.length, 13);
 	assert.equal(initialize({ giftCodeRedeem: { mode: "retired" }, blacklist: ["gift-code-redeem"]}).fixed.length, 13);
 	assert.equal(initialize({ whitelist: ["gift-code-redeem"]}).fixed.length, 0);
 	assert.throws(() => initialize({ expedition: { mode: "interval", min: "299s", max: "1h" } }), /crons.expedition:.*at least 5 minutes/);
 	assert.equal(initialize({ checkIn: "" }).fixed[0].expression, "0 * * * * *");
+});
+
+test("startup waits for clients and starts only randomized primary jobs", async () => {
+	const events = [];
+	let fixed;
+	const complete = event => async () => {
+		await Promise.resolve();
+		events.push(event);
+	};
+	const definitions = {
+		"./mimo/index.js": {
+			name: "mimo",
+			code: () => {},
+			additionalSchedules: [{ expression: "0 0 11 * * 1", timeZone: "UTC" }]
+		}
+	};
+	const dependencies = {
+		"./config.js": { platforms: [{ active: true }], accounts: [{ active: true }]},
+		"./classes/command.js": { importData: () => {} },
+		"./classes/config.js": { load: () => {}, data: new Map() },
+		"./classes/got.js": { initialize: () => ({ importData: () => {} }) },
+		"./singleton/logger.js": class { info () {} },
+		"./singleton/test-notification.js": { sendTestNotifications: () => events.push("test notification") },
+		"./hoyolab-modules/template.js": {
+			refreshStoredCookies: complete("cookie refresh"),
+			create: () => ({ login: complete("login") })
+		},
+		"./platforms/template.js": { create: () => ({ connect: complete("connect") }) },
+		"./commands/index.js": { loadCommands: () => ({}) },
+		"./crons/randomized-scheduler.js": schedulerModule,
+		"./localization/index.js": require("../localization/index.js"),
+		"./crons/index.js": { initCrons: () => {
+			const result = initialize({
+				whitelist: ["check-in", "dailies-reminder", "mimo"],
+				mimo: { mode: "interval", min: "30m", max: "1h" }
+			}, definitions);
+			fixed = result.fixed;
+			assert.equal(fixed.length, 3);
+			assert.ok(fixed.every(job => job.starts === 1));
+			const mimo = result.jobs.find(job => job.name === "mimo");
+			assert.equal(mimo.job.stopped, true);
+			mimo.job.start = async () => {
+				events.push("randomized start");
+				await Promise.resolve();
+				events.push("randomized ready");
+			};
+			events.push("cron registration");
+			return result.jobs;
+		} }
+	};
+
+	await vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../index.js"), "utf8"), {
+		process: { hrtime: { bigint: () => 0n }, on: () => {} },
+		require: name => dependencies[name] ?? class {}
+	});
+	assert.deepEqual(events, ["cron registration", "cookie refresh", "login", "connect", "randomized start", "randomized ready", "test notification"]);
+	assert.ok(fixed.every(job => job.starts === 1));
 });
 
 test("randomized modes replace selected crons and respect existing filters", () => {
@@ -99,6 +163,8 @@ test("internal fixed schedules ignore legacy strings and reject schedule objects
 	for (const [name, key] of [["dailies-reminder", "dailiesReminder"], ["howl-scratch-card", "howlScratchCard"], ["weeklies-reminder", "weekliesReminder"]]) {
 		const result = initialize({ whitelist: [name], [key]: "ignored invalid legacy expression" });
 		assert.equal(result.fixed.length, 1);
+		assert.equal(result.jobs[0].name, key);
+		assert.equal(result.jobs[0].job, result.fixed[0]);
 		assert.equal(result.fixed[0].expression, "0 * * * * *");
 		assert.equal(result.fixed[0].code(), "existing code");
 		for (const options of [{ mode: "interval", min: "30m", max: "1h" }, { mode: "daily-window", start: "00:30", end: "02:00" }, { mode: "cron", expression: "0 0 1 * * *" }]) {
@@ -218,10 +284,20 @@ test("Mimo restock schedules survive every primary schedule mode and retain game
 			const definitions = { "./mimo/index.js": definition };
 			const result = initialize({ whitelist: ["mimo"], mimo }, definitions);
 			const restocks = result.fixed.filter(job => job.timeZone === "UTC");
+			assert.equal(result.jobs.length, 1);
+			assert.deepEqual(Array.from(result.jobs[0].additionalJobs ?? []), restocks);
+			if (mimo?.mode === "interval" || mimo?.mode === "daily-window") {
+				assert.ok(result.jobs[0].job instanceof schedulerModule.RandomizedScheduler);
+				assert.equal(result.jobs[0].job.stopped, true);
+			}
+			else {
+				assert.equal(result.jobs[0].job, result.fixed.at(-1));
+				assert.equal(result.jobs[0].job.starts, 1);
+			}
 			assert.equal(restocks.length, mimoRestock === false ? 0 : 2);
 			assert.deepEqual(restocks.map(job => job.expression), mimoRestock === false ? [] : ["1 0,1 11 * * 1", "1 0,1 11 * * 3"]);
 			for (const job of restocks) {
-				assert.equal(job.started, true);
+				assert.equal(job.starts, 1);
 				job.code();
 			}
 			assert.deepEqual(calls, mimoRestock === false ? [] : ["starrail", "nap"]);
