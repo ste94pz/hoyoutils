@@ -776,6 +776,7 @@
 			"userId:": "ID utente:",
 			warn: "avviso",
 			"weekliesCheck:": "Controllo attività settimanali:",
+			"Default (enabled)": "Impostazione predefinita (attivo)",
 			"whitelist:": "Attività consentite:",
 			"| source code:": "| codice sorgente:",
 			"Please select a config.json5 file.": "Seleziona un file config.json5.",

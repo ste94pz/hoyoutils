@@ -7,6 +7,9 @@ const shopStatusCron = require("../crons/shop-status/index.js");
 const staminaCron = require("../crons/stamina/index.js");
 const Zenless = require("../hoyolab-modules/zenless/index.js");
 const HoyoLab = require("../hoyolab-modules/template.js");
+const HoyoDate = require("../object/date.js");
+const RegionalTaskManager = require("../object/regional-task-manager.js");
+const Platform = require("../platforms/template.js");
 
 const cookie = "ltoken_v2=synthetic-token; ltuid_v2=synthetic-id; ltmid_v2=synthetic-mid; cookie_token_v2=synthetic-cookie-token; account_mid_v2=synthetic-account-mid; account_id_v2=synthetic-account-id";
 const role = {
@@ -33,7 +36,7 @@ const dailyNote = (overrides = {}) => ({
 		} }
 });
 
-const setup = async (t, language, configuredCookie = cookie) => {
+const setup = async (t, language, configuredCookie = cookie, accountOptions = {}) => {
 	const harness = await createHttpHarness(t, { language });
 	t.mock.method(Date, "now", () => 1800000000000);
 	for (const name of ["info", "warn", "log"]) {
@@ -63,7 +66,8 @@ const setup = async (t, language, configuredCookie = cookie) => {
 			stamina: { check: true, threshold: 100, persistent: false },
 			redeemCode: true,
 			dailiesCheck: true,
-			shopStatus: true
+			shopStatus: true,
+			...accountOptions
 		}]});
 	app.HoyoLab = {
 		getRegion: (region) => region === "prod_gf_tw" ? "TW/HK/MO" : "EU",
@@ -161,6 +165,58 @@ test("discovery preserves the TW/HK/MO timezone mapping", async (t) => {
 	await game.login();
 	assert.equal(game.accounts[0].timezone, "SEA");
 });
+
+for (const weekliesCheck of [false, true, undefined]) {
+	test(`weekly reminders respect the Zenless account setting (${weekliesCheck ?? "omitted"})`, async (t) => {
+		const accountOptions = weekliesCheck === undefined ? {} : { weekliesCheck };
+		const { game, requests, replies, logs } = await setup(t, undefined, cookie, accountOptions);
+		app.HoyoLab = HoyoLab;
+		app.Date = HoyoDate;
+		const timers = [];
+		app.RegionalTaskManager = class extends RegionalTaskManager {
+			constructor () {
+				super({
+					now: () => Date.parse("2026-11-22T20:00:00Z"),
+					random: () => 0,
+					setTimer: callback => timers.push(callback)
+				});
+			}
+		};
+		const embeds = [];
+		const messages = [];
+		t.mock.method(Platform, "getForAccount", () => [
+			{ name: "webhook", createUserMention: () => "", send: (...args) => embeds.push(args) },
+			{ name: "telegram", send: message => messages.push(message) }
+		]);
+		app.Platform = Platform;
+		const cronPath = require.resolve("../crons/weeklies-reminder/index.js");
+		t.after(() => delete require.cache[cronPath]);
+		const cron = require(cronPath);
+		replies.push(card(), dailyNote({
+			bounty_commission: { num: 2, total: 3 },
+			survey_points: { num: 100, total: 8000 }
+		}));
+
+		await game.login();
+		await cron.code();
+		assert.equal(timers.length, 1);
+		assert.equal(requests.length, 1);
+		assertRequest(requests[0], false);
+		await timers[0]();
+
+		const expectedCalls = weekliesCheck === false ? 0 : 1;
+		assert.equal(requests.length - 1, expectedCalls, "weekly Notes requests");
+		assert.equal(embeds.length, expectedCalls, "webhook reminders");
+		assert.equal(messages.length, expectedCalls, "Telegram reminders");
+		assert.equal(game.accounts[0].weekliesCheck, weekliesCheck);
+		assert.equal(logs.some(([, message]) => message === "Reminder failed; waiting for the next window"), false);
+		if (expectedCalls) {
+			assertRequest(requests[1], true);
+			assert.equal(embeds[0][1].notificationType, "weeklies");
+			assert.match(messages[0], /100\/8000/);
+		}
+	});
+}
 
 for (const [name, response, message] of [
 	["HTTP failure", { statusCode: 403 }, /Failed to login/],

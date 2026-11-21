@@ -99,6 +99,24 @@ const roundTrip = async (setup, input) => {
 	return JSON5.parse(await setup.exportedText());
 };
 
+test("setup round-trips explicit and omitted Zenless weekly reminder settings", async () => {
+	const setup = createSetup();
+	const data = [
+		{ cookie: "synthetic-off", weekliesCheck: false },
+		{ cookie: "synthetic-on", weekliesCheck: true },
+		{ cookie: "synthetic-legacy" }
+	];
+	const exported = await roundTrip(setup, JSON5.stringify({ accounts: [{ type: "zenless", active: true, data }]}));
+	const reexported = await roundTrip(setup, JSON5.stringify(exported));
+	for (const config of [exported, reexported]) {
+		const zenless = config.accounts.find(account => account.type === "zenless");
+		assert.deepEqual(zenless.data.map(({ cookie, weekliesCheck }) => ({
+			cookie,
+			...(weekliesCheck !== undefined && { weekliesCheck })
+		})), data);
+	}
+});
+
 for (const [type, region, defaultThreshold] of [
 	["genshin", "os_euro", 150],
 	["starrail", "prod_official_eur", 150],

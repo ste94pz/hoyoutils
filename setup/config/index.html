@@ -709,6 +709,13 @@
                 </select>
                 <div class="small-text" data-i18n="(false by default)">(false by default)</div>
 
+                <label for="zenlessweekliesCheck" data-i18n="weekliesCheck:">weekliesCheck:</label>
+                <select id="zenlessweekliesCheck">
+                    <option value="default" data-i18n="Default (enabled)">Default (enabled)</option>
+                    <option value="true" data-i18n="true">true</option>
+                    <option value="false" data-i18n="false">false</option>
+                </select>
+
                 <label for="zenlessstaminaCheck" data-i18n="Stamina Check:">Stamina Check:</label>
                 <select id="zenlessstaminaCheck">
                     <option value="select" data-i18n="Select option">Select option</option>
@@ -1168,6 +1175,7 @@
             const entry = data || {};
             fillCharacterAccount(accountElement, entry);
             setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessshopStatus"]'), entry.shopStatus);
+            setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessweekliesCheck"]'), entry.weekliesCheck, 'default');
         }
 
         document.getElementById('copy-settings-zenless').onclick = function () {
@@ -1406,12 +1414,14 @@
             // Zenless accounts
             const zenlessAccounts = document.querySelectorAll('#zenlessaccounts .account');
             zenlessAccounts.forEach(accountElement => {
+                const weekliesCheck = accountElement.querySelector('select[id*="zenlessweekliesCheck"]').value;
                 const accountData = {
                     cookie: accountElement.querySelector('input[id*="zenlessCookie"]').value || '',
                     ...readCharacterSelection(accountElement),
                     redeemCode: accountElement.querySelector('select[id*="zenlessredeemCode"]').value === 'true',
                     shopStatus: accountElement.querySelector('select[id*="zenlessshopStatus"]').value === 'true',
                     dailiesCheck: accountElement.querySelector('select[id*="zenlessdailiesCheck"]').value === 'true',
+                    ...(weekliesCheck !== 'default' && { weekliesCheck: weekliesCheck === 'true' }),
                     stamina: readStaminaSettings(accountElement, '200'),
                     discord: {
                         userId: accountElement.querySelector('input[id*="zenlessuserId"]').value || null,

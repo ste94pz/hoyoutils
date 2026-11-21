@@ -78,4 +78,5 @@ daylight-saving changes.
     exchange for Polychrome.
 
 Weekly reminders only run for Genshin Impact, Honkai: Star Rail, and Zenless
-Zone Zero.
+Zone Zero. For Zenless, set `weekliesCheck` to `false` on the account to
+disable weekly reminders. Omitting the setting keeps them enabled.
