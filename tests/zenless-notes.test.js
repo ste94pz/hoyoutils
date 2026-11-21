@@ -1,6 +1,10 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHttpHarness } = require("./helpers/http.js");
+const { createNotesConsumers, notesKey, testStaminaNotesRace } = require("./helpers/notes-concurrency.js");
+const testNotesThreshold = require("./helpers/notes-threshold.js");
+const shopStatusCron = require("../crons/shop-status/index.js");
+const staminaCron = require("../crons/stamina/index.js");
 const Zenless = require("../hoyolab-modules/zenless/index.js");
 const HoyoLab = require("../hoyolab-modules/template.js");
 
@@ -29,7 +33,7 @@ const dailyNote = (overrides = {}) => ({
 		} }
 });
 
-const setup = async (t, language) => {
+const setup = async (t, language, configuredCookie = cookie) => {
 	const harness = await createHttpHarness(t, { language });
 	t.mock.method(Date, "now", () => 1800000000000);
 	for (const name of ["info", "warn", "log"]) {
@@ -55,7 +59,7 @@ const setup = async (t, language) => {
 	});
 	const game = new Zenless({ id: 1,
 		data: [{
-			cookie,
+			cookie: configuredCookie,
 			stamina: { check: true, threshold: 100, persistent: false },
 			redeemCode: true,
 			dailiesCheck: true,
@@ -63,8 +67,7 @@ const setup = async (t, language) => {
 		}]});
 	app.HoyoLab = {
 		getRegion: (region) => region === "prod_gf_tw" ? "TW/HK/MO" : "EU",
-		errorMessage: HoyoLab.errorMessage,
-		getAccountById: (uid) => game.accounts.find(account => account.uid === uid)
+		errorMessage: HoyoLab.errorMessage
 	};
 	return { ...harness, game, cache, writes };
 };
@@ -98,7 +101,7 @@ const assertRequest = (request, notes, language = "en-us", expectedCookie = cook
 
 for (const language of [undefined, "it-it"]) {
 	test(`discovery and Notes preserve account, parser and cache contracts (${language ?? "default"})`, async (t) => {
-		const { game, requests, replies, cache, writes } = await setup(t, language);
+		const { game, requests, replies, writes } = await setup(t, language);
 		replies.push(card(), dailyNote());
 		assert.equal(await game.login(), undefined);
 		assert.equal(game.accounts.length, 1);
@@ -125,11 +128,22 @@ for (const language of [undefined, "it-it"]) {
 				shop: { state: "Open" },
 				assets: { ...game.config.assets, logo: role.logo, color: 0xFF8300 }
 			} });
-		assert.equal(writes[0].expiry, 3600000);
-		assert.equal(cache.get(account.uid).nickname, role.nickname);
-		for (const key of ["stamina", "dailies", "weeklies", "shop", "cardSign"]) {
-			assert.deepEqual(cache.get(account.uid)[key], result.data[key]);
-		}
+		const { cardSign, stamina, dailies, weeklies, shop } = result.data;
+		assert.deepEqual(writes, [{
+			key: notesKey(account),
+			expiry: 3600000,
+			value: {
+				uid: role.game_role_id,
+				nickname: role.nickname,
+				lastUpdate: Date.now(),
+				expires: Date.now(),
+				cardSign,
+				stamina,
+				dailies,
+				weeklies,
+				shop
+			}
+		}]);
 		const cached = await game.notes(account);
 		assert.equal(cached.success, true);
 		assert.equal(cached.data.stamina.currentStamina, 40);
@@ -221,8 +235,10 @@ test("Notes forwards the complete supplied cookie, including fields outside the 
 
 for (const [name, response, expected] of [
 	["null data", { body: { retcode: 0, data: null } }, { success: false, error: "No data received from API" }],
-	["missing energy", dailyNote({ energy: null }), { success: false }],
-	["missing vitality", dailyNote({ vitality: null }), { success: false }]
+	["null energy", dailyNote({ energy: null }), { success: false }],
+	["null vitality", dailyNote({ vitality: null }), { success: false }],
+	["missing energy", dailyNote({ energy: undefined }), { success: false }],
+	["missing vitality", dailyNote({ vitality: undefined }), { success: false }]
 ]) {
 	test(`Notes rejects ${name} without cache writes`, async (t) => {
 		const { game, replies, requests, writes } = await setup(t);
@@ -234,6 +250,25 @@ for (const [name, response, expected] of [
 		assertRequest(requests[1], true);
 	});
 }
+
+test("Notes preserves a missing shop in the fresh response and cache hit", async (t) => {
+	const { game, replies, requests, writes } = await setup(t);
+	replies.push(card(), dailyNote({ vhs_sale: undefined }));
+	await game.login();
+	const [account] = game.accounts;
+
+	const fresh = await game.notes(account);
+	assert.equal(fresh.success, true);
+	assert.equal(fresh.data.shop, null);
+	assert.equal(writes.length, 1);
+	assert.equal(writes[0].value.shop, null);
+
+	const cached = await game.notes(account);
+	assert.equal(cached.success, true);
+	assert.equal(cached.data.shop, null);
+	assert.equal(requests.length, 2);
+	assertRequest(requests[1], true);
+});
 
 test("Notes preserves populated weekly totals and scratch card/shop states", async (t) => {
 	const { game, replies } = await setup(t);
@@ -250,10 +285,10 @@ test("Notes preserves populated weekly totals and scratch card/shop states", asy
 	assert.equal(result.data.shop.state, "Closed");
 });
 
-for (const platformId of [1, 2]) {
-	test(`Notes command renders nullable weekly data on platform ${platformId}`, async (t) => {
+for (const [platformId, shopState] of [[1, "Open"], [2, "Open"], [1, "Not available"], [2, "Not available"]]) {
+	test(`Notes command renders nullable weekly data and shop status ${shopState} on platform ${platformId}`, async (t) => {
 		const { game, replies, requests } = await setup(t);
-		replies.push(card(), dailyNote());
+		replies.push(card(), shopState === "Open" ? dailyNote() : dailyNote({ vhs_sale: null }));
 		await game.login();
 		Object.assign(app.HoyoLab, {
 			supportedGames: () => ["nap"],
@@ -272,14 +307,252 @@ for (const platformId of [1, 2]) {
 		if (platformId === 1) {
 			const [embed] = sent[0].embeds;
 			assert.equal(embed.color, 0xFF8300);
+			assert.match(embed.fields[0].value, /^40\/240/);
+			assert.equal(embed.fields.find(field => field.name === "Dailies").value, "200/400");
 			assert.equal(embed.fields.find(field => field.name === "Weeklies").value, "Bounty Commission: 0/0\nSurvey Points: 0/0");
-			assert.equal(embed.fields.find(field => field.name === "Shop Status").value, "Open");
+			assert.equal(embed.fields.find(field => field.name === "Shop Status").value, shopState);
 			assert.equal(embed.fields.find(field => field.name === "Scratch Card").value, "Completed");
 		}
 		else {
-			assert.match(sent[0], /Bounty Commission: 0\/0\nSurvey Points: 0\/0\nShop Status: Open\nHowl Scratch Card: Completed/);
+			assert.match(sent[0], /Current Stamina: 40\/240/);
+			assert.match(sent[0], /Dailies: 200\/400\nBounty Commission: 0\/0\nSurvey Points: 0\/0/);
+			assert.ok(sent[0].endsWith(`\nShop Status: ${shopState}\nHowl Scratch Card: Completed`));
 		}
 		assert.equal(requests.length, 2);
 		assertRequest(requests[1], true);
 	});
 }
+
+const noteWithStamina = current => dailyNote({ energy: { progress: { current, max: 240 }, restore: 72000 } });
+testNotesThreshold("ZZZ", setup, card, noteWithStamina, request => assertRequest(request, true));
+testStaminaNotesRace("ZZZ", setup, card, noteWithStamina, request => assertRequest(request, true));
+
+const rotatedTokens = [
+	{ token_type: 2, token: "synthetic-rotated-ltoken" },
+	{ token_type: 4, token: "synthetic-rotated-cookie-token" }
+];
+const rotatedCookie = cookie.replace("ltoken_v2=synthetic-token", "ltoken_v2=synthetic-rotated-ltoken")
+	.replace("cookie_token_v2=synthetic-cookie-token", "cookie_token_v2=synthetic-rotated-cookie-token")
+	.replace("account_mid_v2=synthetic-account-mid", "account_mid_v2=synthetic-mid")
+	.replace("account_id_v2=synthetic-account-id", "account_id_v2=synthetic-id");
+
+for (const refreshSucceeds of [true, false]) {
+	const outcome = refreshSucceeds ? "rotates credentials" : "rejects the refresh";
+	test(`ZZZ Notes: a lone in-flight response preserves its result when Passport ${outcome}`, { timeout: 5000 }, async (t) => {
+		const { game, requests, replies, cache, writes } = await setup(t, undefined, `${cookie}; stoken=synthetic-refresh`);
+		replies.push(card());
+		await game.login();
+		const { account, manualReplies, runManual, holdReply } = createNotesConsumers(game, replies);
+		const pendingReply = holdReply(dailyNote());
+		const manual = runManual();
+		await pendingReply.started;
+		assertRequest(requests[1], true);
+
+		replies.push({ body: refreshSucceeds
+			? { retcode: 0, data: { tokens: rotatedTokens } }
+			: { retcode: -100, message: "Synthetic rejection" } });
+		assert.equal(await HoyoLab.refreshStoredCookies(cookie), refreshSucceeds);
+		assert.equal(requests.length, 3);
+		assert.equal(requests[2].url.pathname, "/account/ma-passport/token/getBySToken");
+		assert.equal(account.cookie, refreshSucceeds ? rotatedCookie : cookie);
+
+		pendingReply.release();
+		await manual;
+		assert.equal(manualReplies.length, 1);
+		assert.match(manualReplies[0].embeds[0].fields[0].value, /^40\//);
+		const key = notesKey(account);
+		assert.equal(cache.get(key)?.stamina.currentStamina, refreshSucceeds ? undefined : 40);
+		assert.equal(writes.filter(entry => entry.key === key).length, refreshSucceeds ? 0 : 1);
+
+		if (refreshSucceeds) {
+			replies.push(noteWithStamina(70));
+			const result = await game.notes(account);
+			assert.equal(requests.length, 4);
+			assertRequest(requests[3], true, "en-us", rotatedCookie);
+			assert.equal(result.data.stamina.currentStamina, 70);
+			assert.equal(cache.get(key).stamina.currentStamina, 70);
+		}
+	});
+}
+
+test("ZZZ Notes: Passport rotation during a manual fetch gives the stamina cron new credentials", { timeout: 5000 }, async (t) => {
+	const { game, requests, replies, cache, writes } = await setup(t, undefined, `${cookie}; stoken=synthetic-refresh`);
+	replies.push(card());
+	await game.login();
+	const { account, manualReplies, notifications, runManual, holdReply } = createNotesConsumers(game, replies);
+	const manualReply = holdReply(dailyNote());
+	const manual = runManual();
+	await manualReply.started;
+
+	replies.push({ body: { retcode: 0, data: { tokens: rotatedTokens } } });
+	assert.equal(await HoyoLab.refreshStoredCookies(cookie), true);
+	assert.equal(requests[2].method, "POST");
+	assert.equal(requests[2].url.pathname, "/account/ma-passport/token/getBySToken");
+	const cronReply = holdReply(noteWithStamina(110));
+	const cron = staminaCron.code();
+	await cronReply.started;
+	assert.equal(requests.length, 4);
+	assertRequest(requests[1], true);
+	assertRequest(requests[3], true, "en-us", rotatedCookie);
+	cronReply.release();
+	await cron;
+	assert.equal(manualReplies.length, 0);
+	assert.equal(notifications.length, 1);
+	assert.equal(notifications[0].options.notificationType, "stamina");
+	assert.match(notifications[0].embed.fields.find(field => field.name === "Stamina").value, /^110\//);
+	manualReply.release();
+	await manual;
+	assert.match(manualReplies[0].embeds[0].fields[0].value, /^40\//);
+	assert.deepEqual(writes.filter(entry => entry.key === notesKey(account)).map(entry => entry.value.stamina.currentStamina), [110]);
+	assert.equal(cache.get(notesKey(account)).stamina.currentStamina, 110);
+	assert.equal(requests.length, 4);
+});
+
+test("ZZZ Notes: shop cron invalidation prevents an in-flight manual fetch from repopulating the cache", { timeout: 5000 }, async (t) => {
+	const { game, requests, replies, cache, writes } = await setup(t);
+	replies.push(card(), noteWithStamina(100));
+	await game.login();
+	const { account, manualReplies, notifications, runManual, holdReply } = createNotesConsumers(game, replies);
+	await game.notes(account);
+
+	const manualReply = holdReply(dailyNote());
+	const shopReply = holdReply(dailyNote({ vhs_sale: { sale_state: "SaleStateDone" } }));
+	const manual = runManual();
+	await manualReply.started;
+	assert.equal(cache.get(notesKey(account)).stamina.currentStamina, 100);
+
+	const cron = shopStatusCron.code();
+	await shopReply.started;
+	assert.equal(cache.has(notesKey(account)), false);
+	assert.equal(requests.length, 4); // Login, seed, manual request and forced refresh.
+	assertRequest(requests[2], true);
+	assertRequest(requests[3], true);
+	assert.deepEqual(requests[2], requests[3]);
+
+	const priorWriteCount = writes.length;
+	manualReply.release();
+	await manual;
+	assert.equal(cache.has(notesKey(account)), false);
+	assert.equal(manualReplies.length, 1);
+	assert.equal(manualReplies[0].embeds[0].fields.find(field => field.name === "Shop Status").value, "Open");
+	assert.equal(notifications.length, 0);
+
+	shopReply.release();
+	await cron;
+	assert.deepEqual(writes.slice(priorWriteCount).map(entry => entry.value.shop.state), ["Finished"]);
+	assert.equal(cache.get(notesKey(account)).shop.state, "Finished");
+	assert.equal(account.shop.fired, true);
+	assert.equal(notifications.length, 1);
+	assert.equal(notifications[0].options.notificationType, "shopStatus");
+	assert.equal(requests.length, 4);
+});
+
+test("ZZZ Notes: a manual miss after shop invalidation can finish before the forced fetch", { timeout: 5000 }, async (t) => {
+	const { game, requests, replies, cache, writes } = await setup(t);
+	replies.push(card(), dailyNote());
+	await game.login();
+	const { account, manualReplies, notifications, runManual, holdReply } = createNotesConsumers(game, replies);
+	await game.notes(account);
+	const shopReply = holdReply(dailyNote({ vhs_sale: { sale_state: "SaleStateDone" } }));
+	const manualReply = holdReply(dailyNote());
+	const cron = shopStatusCron.code();
+	await shopReply.started;
+	assert.equal(cache.has(notesKey(account)), false);
+	const manual = runManual();
+	await manualReply.started;
+	assert.equal(requests.length, 4);
+	assertRequest(requests[2], true);
+	assert.deepEqual(requests[2], requests[3]);
+
+	manualReply.release();
+	await manual;
+	assert.equal(manualReplies[0].embeds[0].fields.find(field => field.name === "Shop Status").value, "Open");
+	assert.equal(notifications.length, 0);
+	shopReply.release();
+	await cron;
+	assert.equal(account.shop.fired, true);
+	assert.equal(notifications.length, 1);
+	assert.equal(notifications[0].options.notificationType, "shopStatus");
+	assert.deepEqual(writes.map(entry => entry.value.shop.state), ["Open", "Open"]);
+	assert.equal(cache.get(notesKey(account)).shop.state, "Open");
+	assert.equal(requests.length, 4);
+});
+
+test("ZZZ Notes: shop refresh affects only the selected region when role IDs match", { timeout: 5000 }, async t => {
+	const { game, requests, replies, cache } = await setup(t);
+	game.data[0].shopStatus = false;
+	game.data.push({ ...game.data[0], shopStatus: true, stamina: { ...game.data[0].stamina, threshold: 150 } });
+	replies.push(card(), card([{ ...role, region: "prod_gf_jp" }]), noteWithStamina(65), noteWithStamina(110));
+	await game.login();
+	const [europe, asia] = game.accounts;
+	const { notifications, holdReply } = createNotesConsumers(game, replies);
+	assert.equal(europe.uid, asia.uid);
+	await game.notes(europe);
+	await game.notes(asia);
+	assert.equal(cache.get(notesKey(europe)).stamina.currentStamina, 65);
+	assert.equal(cache.get(notesKey(asia)).stamina.currentStamina, 110);
+
+	// Only the Asian account's threshold admits this cached sample.
+	const warmAsia = await game.notes(asia);
+	assert.equal(warmAsia.success, true);
+	assert.ok(warmAsia.data.stamina.currentStamina >= 110);
+	assert.equal(requests.length, 4);
+
+	const refreshed = holdReply(dailyNote({ vhs_sale: { sale_state: "SaleStateDone" } }));
+	const cron = shopStatusCron.code();
+	await refreshed.started;
+	assert.equal(cache.has(notesKey(asia)), false);
+	assert.equal(cache.get(notesKey(europe)).stamina.currentStamina, 65);
+	assert.equal(requests[4].url.searchParams.get("server"), asia.region);
+
+	const warmEurope = await game.notes(europe);
+	assert.equal(warmEurope.success, true);
+	assert.ok(warmEurope.data.stamina.currentStamina >= 65);
+	refreshed.release();
+	await cron;
+	assert.equal(cache.get(notesKey(asia)).shop.state, "Finished");
+	assert.equal(cache.get(notesKey(europe)).shop.state, "Open");
+	assert.deepEqual(game.accounts, [europe, asia]);
+	assert.equal(europe.shop.fired, false);
+	assert.equal(asia.shop.fired, true);
+	assert.equal(notifications.length, 1);
+	assert.equal(notifications[0].options.notificationType, "shopStatus");
+	assert.equal(requests.length, 5);
+});
+
+test("ZZZ Notes: an absent shop preserves notification state and the cron continues", async t => {
+	const { game, requests, replies, cache } = await setup(t);
+	game.data.push({ ...game.data[0] });
+	const secondRole = { ...role, region: "prod_gf_jp" };
+	const finished = dailyNote({ vhs_sale: { sale_state: "SaleStateDone" } });
+	replies.push(card(), card([secondRole]), dailyNote(), dailyNote());
+	await game.login();
+	const [first, second] = game.accounts;
+	first.shop.fired = true;
+	const { notifications } = createNotesConsumers(game, replies);
+	await game.notes(first);
+	await game.notes(second);
+	const update = t.mock.method(game, "update");
+
+	replies.push(dailyNote({ vhs_sale: null }), finished);
+	await shopStatusCron.code();
+	assert.deepEqual(requests.slice(4).map(request => request.url.searchParams.get("server")), [first.region, second.region]);
+	assert.equal(cache.get(notesKey(first)).shop, null);
+	assert.equal(cache.get(notesKey(second)).shop.state, "Finished");
+	assert.equal(first.shop.fired, true);
+	assert.equal(second.shop.fired, true);
+	assert.deepEqual(update.mock.calls.map(call => call.arguments[0]), [second]);
+	assert.deepEqual(notifications.map(({ options }) => options.notificationType), ["shopStatus"]);
+
+	replies.push(finished, finished);
+	await shopStatusCron.code();
+	assert.equal(update.mock.callCount(), 1);
+	assert.equal(notifications.length, 1);
+
+	replies.push(dailyNote({ vhs_sale: { sale_state: "SaleStateNo" } }), dailyNote());
+	await shopStatusCron.code();
+	assert.equal(first.shop.fired, false);
+	assert.equal(second.shop.fired, false);
+	assert.deepEqual(update.mock.calls.map(call => call.arguments[0]), [second, first, second]);
+	assert.equal(notifications.length, 1);
+});

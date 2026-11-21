@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHttpHarness } = require("./helpers/http.js");
+const { notesKey, testStaminaNotesRace } = require("./helpers/notes-concurrency.js");
+const testNotesThreshold = require("./helpers/notes-threshold.js");
 const StarRail = require("../hoyolab-modules/starrail/index.js");
 const Honkai = require("../hoyolab-modules/honkai/index.js");
 const Utils = require("../singleton/utils.js");
@@ -56,8 +58,7 @@ const setup = async (t, language, hi3 = false) => {
 		}]});
 	app.HoyoLab = {
 		getRegion: (region) => region === "os_cht" ? "TW/HK/MO" : "EU",
-		errorMessage: HoyoLab.errorMessage,
-		getAccountById: (uid) => game.accounts.find(account => account.uid === uid)
+		errorMessage: HoyoLab.errorMessage
 	};
 	return { ...harness, game, cache, writes };
 };
@@ -111,7 +112,7 @@ const assertRequest = (request, notes = false, hi3 = false, language = "en-us", 
 for (const hi3 of [false, true]) {
 	for (const language of [undefined, "it-it"]) {
 		test(`signed desktop discovery preserves roles (${hi3 ? "HI3" : "HSR"}, ${language ?? "default"})`, async (t) => {
-			const { game, replies, requests } = await setup(t, language, hi3);
+			const { game, replies, requests, writes } = await setup(t, language, hi3);
 			replies.push(card([{ game_id: 2 }, { ...role, game_id: hi3 ? 1 : 6 }]));
 			await game.login();
 			assert.equal(game.accounts.length, 1);
@@ -143,6 +144,7 @@ for (const hi3 of [false, true]) {
 					tournMaxScore: 1000,
 					tournUnlocked: true });
 				assert.deepEqual(result.data.expedition, { completed: true, list: []});
+				assert.deepEqual(writes[0].value.expedition, result.data.expedition);
 				const cached = await game.notes(account);
 				for (const key of ["dailies", "weeklies", "expedition", "assets"]) {
 					assert.deepEqual(cached.data[key], result.data[key]);
@@ -207,8 +209,52 @@ test("Notes refreshes at the threshold, keeps full cookies and maps active exped
 			{ avatar: [], status: "Finished", remaining_time: 0 }
 		]});
 	assert.equal(writes.length, 3); // Initial response, cache aging, refreshed response.
+	assert.deepEqual(writes[2].value.expedition, result.data.expedition);
 	assert.equal(requests.length, 3);
 	assertRequest(requests[2], true, false, "en-us", account.cookie);
+});
+
+test("HSR Notes persists an active expedition and projects the countdown on a cache hit", async (t) => {
+	const { game, replies, requests, writes } = await setup(t);
+	const avatars = ["https://example.invalid/first.png", "https://example.invalid/second.png"];
+	replies.push(card(), dailyNote({ expeditions: [{ avatars, status: "Ongoing", remaining_time: "3600" }]}));
+	await game.login();
+	const [account] = game.accounts;
+	const result = await game.notes(account);
+	const { assets, ...snapshot } = result.data;
+	assert.deepEqual(snapshot.expedition, {
+		completed: false,
+		list: [{ avatar: avatars, status: "Ongoing", remaining_time: "3600" }]
+	});
+	const metadata = { uid: account.uid, nickname: account.nickname, lastUpdate: Date.now(), expires: Date.now() };
+	assert.deepEqual(writes, [{ key: notesKey(account), value: { ...metadata, ...snapshot }, expiry: 3600000 }]);
+
+	t.mock.method(Date, "now", () => metadata.lastUpdate + 4000);
+	const cached = await game.notes(account);
+	assert.deepEqual(cached.data.expedition, {
+		completed: false,
+		list: [{ avatar: avatars, status: "Ongoing", remaining_time: 3595 }]
+	});
+	assert.deepEqual(cached.data.assets, assets);
+	assert.equal(writes[1].expiry, 3596000);
+	assert.equal(writes[1].value.expires, metadata.expires);
+	assert.equal(requests.length, 2);
+});
+
+test("HSR Notes marks finished expeditions complete and refreshes at zero countdown", async (t) => {
+	const { game, replies, requests, writes } = await setup(t);
+	replies.push(card(), dailyNote({ expeditions: [{ avatars: [], status: "fInIsHeD", remaining_time: 0 }]}), dailyNote());
+	await game.login();
+	const [account] = game.accounts;
+	const result = await game.notes(account);
+	assert.deepEqual(result.data.expedition, {
+		completed: true,
+		list: [{ avatar: [], status: "fInIsHeD", remaining_time: 0 }]
+	});
+	assert.deepEqual(writes[0].value.expedition, result.data.expedition);
+	const refreshed = await game.notes(account);
+	assert.deepEqual(refreshed.data.expedition, { completed: true, list: []});
+	assert.equal(requests.length, 3);
 });
 
 for (const platformId of [1, 2]) {
@@ -233,3 +279,7 @@ for (const platformId of [1, 2]) {
 		assertRequest(requests[1], true);
 	});
 }
+
+const noteWithStamina = stamina => dailyNote({ current_stamina: stamina });
+testNotesThreshold("HSR", setup, card, noteWithStamina, request => assertRequest(request, true));
+testStaminaNotesRace("HSR", setup, card, noteWithStamina, request => assertRequest(request, true));

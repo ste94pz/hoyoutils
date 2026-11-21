@@ -262,7 +262,7 @@ module.exports = class HoyoLab {
 		this.#config = defaults.config ?? {};
 
 		if (this.#config.regenRate) {
-			this.#dataCache = new DataCache(this.#config.regenRate);
+			this.#dataCache = new DataCache(this.#name, this.#config.regenRate);
 		}
 
 		HoyoLab.list.push(this);
@@ -480,7 +480,7 @@ module.exports = class HoyoLab {
 	}
 
 	update (account) {
-		const index = this.accounts.findIndex(i => i.uid === account.uid);
+		const index = this.accounts.findIndex(i => i.uid === account.uid && i.region === account.region);
 		if (index === -1) {
 			throw new app.Error({
 				message: t("Account not found in platform."),

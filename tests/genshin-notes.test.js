@@ -1,7 +1,10 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHttpHarness } = require("./helpers/http.js");
+const { createNotesConsumers, notesKey, testStaminaNotesRace } = require("./helpers/notes-concurrency.js");
+const testNotesThreshold = require("./helpers/notes-threshold.js");
 const Genshin = require("../hoyolab-modules/genshin/index.js");
+const Zenless = require("../hoyolab-modules/zenless/index.js");
 const HoyoLab = require("../hoyolab-modules/template.js");
 
 const cookie = "ltoken_v2=synthetic-token; ltuid_v2=synthetic-id; ltmid_v2=synthetic-mid; cookie_token_v2=synthetic-cookie-token; account_mid_v2=synthetic-account-mid; account_id_v2=synthetic-account-id";
@@ -73,8 +76,7 @@ const setup = async (t, language) => {
 		}]});
 	app.HoyoLab = {
 		getRegion: (region) => region === "os_cht" ? "TW/HK/MO" : "EU",
-		errorMessage: HoyoLab.errorMessage,
-		getAccountById: (uid) => game.accounts.find(account => account.uid === uid)
+		errorMessage: HoyoLab.errorMessage
 	};
 	return { ...harness, game, cache, writes };
 };
@@ -108,7 +110,7 @@ const assertRequest = (request, notes, language = "en-us", expectedCookie = cook
 
 for (const language of [undefined, "it-it"]) {
 	test(`discovery and Notes preserve account, parser and cache contracts (${language ?? "default"})`, async (t) => {
-		const { game, requests, replies, cache, writes } = await setup(t, language);
+		const { game, requests, replies, writes } = await setup(t, language);
 		replies.push(card(), dailyNote());
 		assert.equal(await game.login(), undefined);
 		assert.equal(game.accounts.length, 1);
@@ -136,16 +138,24 @@ for (const language of [undefined, "it-it"]) {
 				expedition: { completed: false, list: [{ avatar: "https://example.invalid/avatar.png", status: "Ongoing", remaining_time: "1800" }]},
 				assets: { ...game.config.assets, logo: role.logo, color: 0x0099FF }
 			} });
-		assert.equal(writes[0].expiry, 3600000);
-		assert.equal(cache.get(account.uid).nickname, role.nickname);
-		for (const key of ["stamina", "dailies", "weeklies", "realm", "expedition"]) {
-			assert.deepEqual(cache.get(account.uid)[key], result.data[key]);
-		}
+		const { assets, ...snapshot } = result.data;
+		const metadata = {
+			uid: account.uid,
+			nickname: role.nickname,
+			lastUpdate: Date.now(),
+			expires: Date.now()
+		};
+		assert.deepEqual(writes, [{ key: notesKey(account), value: { ...metadata, ...snapshot }, expiry: 3600000 }]);
 		const cached = await game.notes(account);
-		assert.equal(cached.success, true);
-		assert.equal(cached.data.stamina.currentStamina, 40);
-		assert.deepEqual(cached.data.assets, result.data.assets);
-		assert.deepEqual(cached.data.dailies, result.data.dailies);
+		assert.deepEqual(cached, { success: true,
+			data: {
+				...metadata,
+				...snapshot,
+				stamina: { ...snapshot.stamina, recoveryTime: 76799 },
+				realm: { ...snapshot.realm, recoveryTime: 3599 },
+				expedition: { completed: false, list: [{ ...snapshot.expedition.list[0], remaining_time: 1799 }]},
+				assets
+			} });
 		assert.equal(requests.length, 2);
 		assertRequest(requests[0], false, language);
 		assertRequest(requests[1], true, language);
@@ -272,3 +282,63 @@ for (const language of ["en-us", "it-it"]) {
 		});
 	}
 }
+
+const noteWithStamina = stamina => dailyNote({ current_resin: stamina });
+testNotesThreshold("Genshin", setup, card, noteWithStamina, request => assertRequest(request, true));
+testStaminaNotesRace("Genshin", setup, card, noteWithStamina, request => assertRequest(request, true));
+
+test("Notes: matching role IDs across games retain both snapshots when cold fetches finish out of order", { timeout: 5000 }, async (t) => {
+	const { game: genshin, requests, replies, cache, writes } = await setup(t);
+	const zenless = new Zenless({
+		id: 1,
+		data: [{ cookie, stamina: { check: true, threshold: 100, persistent: false } }]
+	});
+	replies.push(card(), card([{ ...role, game_id: 8, region: "prod_gf_eu" }]));
+	await genshin.login();
+	await zenless.login();
+	const zzz = createNotesConsumers(zenless, replies);
+	const gi = createNotesConsumers(genshin, replies);
+	assert.equal(zzz.account.uid, gi.account.uid);
+	const zzzReply = zzz.holdReply({
+		body: {
+			retcode: 0,
+			data: {
+				energy: { progress: { current: 75, max: 240 }, restore: 72000 },
+				vitality: { current: 200, max: 400 },
+				vhs_sale: { sale_state: "SaleStateDoing" }
+			}
+		}
+	});
+	const giReply = gi.holdReply(dailyNote());
+	const zzzManual = zzz.runManual();
+	await zzzReply.started;
+	const giManual = gi.runManual();
+	await giReply.started;
+	assert.equal(requests.length, 4);
+	assert.equal(requests[2].method, "GET");
+	assert.equal(requests[2].url.origin + requests[2].url.pathname, zenless.config.url.notes);
+	assert.deepEqual(Object.fromEntries(requests[2].url.searchParams), { server: "prod_gf_eu", role_id: zzz.account.uid });
+	assert.equal(requests[2].headers["x-rpc-client_type"], undefined);
+	assert.equal(requests[2].headers.cookie, cookie);
+	assertRequest(requests[3], true);
+	assert.equal(writes.length, 0);
+
+	giReply.release();
+	await giManual;
+	zzzReply.release();
+	await zzzManual;
+	assert.match(gi.manualReplies[0].embeds[0].fields[0].value, /^40\/200/);
+	assert.match(zzz.manualReplies[0].embeds[0].fields[0].value, /^75\/240/);
+	assert.deepEqual(writes.map(entry => [entry.key, entry.value.stamina.maxStamina]), [
+		[notesKey(gi.account), 200],
+		[notesKey(zzz.account), 240]
+	]);
+	assert.equal(cache.get(notesKey(zzz.account)).shop.state, "Open");
+
+	await gi.runManual();
+	await zzz.runManual();
+	assert.match(gi.manualReplies[1].embeds[0].fields[0].value, /^40\/200/);
+	assert.match(zzz.manualReplies[1].embeds[0].fields[0].value, /^75\/240/);
+	assert.equal(zzz.manualReplies[1].embeds[0].fields.find(field => field.name === "Shop Status").value, "Open");
+	assert.equal(requests.length, 4);
+});

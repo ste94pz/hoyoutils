@@ -1,36 +1,69 @@
 const { t } = require("../localization/index.js");
+const projectNotesSnapshot = require("./notes-cache-projection.js");
 
 module.exports = class DataCache {
 	static keyvCacheExpiration = 3_600_000;
+	static #pending = new Map();
+	static #fetches = new Map();
+	#game;
 
-	constructor (rate) {
+	constructor (game, rate) {
+		this.#game = game;
 		this.rate = rate;
 	}
 
-	async set (key, value) {
-		if (app.Cache) {
-			await app.Cache.set({
-				key,
-				value,
-				expiry: DataCache.keyvCacheExpiration
-			});
+	#key ({ region, uid }) {
+		// Legacy UID keys cannot establish the game or region of their snapshot.
+		return `notes:${JSON.stringify([this.#game, region, String(uid)])}`;
+	}
+
+	async set (account, value) {
+		await this.fetch(account, saveSnapshot => saveSnapshot(value));
+	}
+
+	async fetch (account, operation) {
+		const key = this.#key(account);
+		const requestCookie = account.cookie;
+		const state = DataCache.#fetches.get(key) ?? { active: 0, started: 0, supersededThrough: 0 };
+		DataCache.#fetches.set(key, state);
+		const order = ++state.started;
+		state.active++;
+
+		try {
+			// Passport can update the account while the request or cache queue is pending.
+			return await operation(value => DataCache.#withKey(key, async () => {
+				if (!app.Cache || requestCookie !== account.cookie || order <= state.supersededThrough) {
+					return;
+				}
+				const saved = await app.Cache.set({ key, value, expiry: DataCache.keyvCacheExpiration });
+				if (saved !== false) {
+					state.supersededThrough = order;
+				}
+			}));
+		}
+		finally {
+			if (--state.active === 0) {
+				DataCache.#fetches.delete(key);
+			}
 		}
 	}
 
-	async get (key) {
+	async get (account) {
+		const key = this.#key(account);
 		try {
-			if (app.Cache) {
-				const cachedData = await app.Cache.get(key);
-				if (cachedData) {
-					app.Logger.debug("Cache", t `Cache hit for key: ${key} (keyv)`);
+			return await DataCache.#withKey(key, async () => {
+				if (app.Cache) {
+					const cachedData = await app.Cache.get(key);
+					if (cachedData) {
+						app.Logger.debug("Cache", t `Cache hit for key: ${this.#game} (keyv)`);
 
-					const updatedData = await this.#updateCachedData(cachedData);
-					return updatedData;
+						return await this.#updateCachedData(key, cachedData, account.stamina.threshold);
+					}
 				}
-			}
 
-			app.Logger.debug("Cache", t `Cache miss for key: ${key}`);
-			return null;
+				app.Logger.debug("Cache", t `Cache miss for key: ${this.#game}`);
+				return null;
+			});
 		}
 		catch (e) {
 			console.error({
@@ -41,110 +74,55 @@ module.exports = class DataCache {
 		}
 	}
 
-	async #updateCachedData (cachedData) {
+	async #updateCachedData (key, cachedData, staminaThreshold) {
 		const now = Date.now();
-		const lastUpdate = cachedData.lastUpdate ?? cachedData.lastUpdated;
-
-		let secondsSinceLastUpdate;
-		if (lastUpdate === undefined) {
-			secondsSinceLastUpdate = 0;
-			cachedData.lastUpdate = now;
-		}
-		else {
-			secondsSinceLastUpdate = Math.floor((now - lastUpdate) / 1000) + 1;
-		}
-
-		if (cachedData.stamina) {
-			const account = app.HoyoLab.getAccountById(cachedData.uid);
-
-			cachedData.stamina.currentStamina = Number(cachedData.stamina.currentStamina) || 0;
-			cachedData.stamina.recoveryTime = Number(cachedData.stamina.recoveryTime) || 0;
-
-			const staminaToAdd = (secondsSinceLastUpdate / this.rate);
-			cachedData.stamina.currentStamina = Math.min(
-				cachedData.stamina.maxStamina,
-				cachedData.stamina.currentStamina + staminaToAdd
-			);
-
-			cachedData.stamina.recoveryTime = Math.max(0, cachedData.stamina.recoveryTime - secondsSinceLastUpdate);
-			cachedData.stamina.currentStamina = Math.round(cachedData.stamina.currentStamina * 100) / 100;
-
-			if (cachedData.stamina.currentStamina >= cachedData.stamina.maxStamina) {
-				cachedData.stamina.currentStamina = cachedData.stamina.maxStamina;
-				cachedData.stamina.recoveryTime = 0;
-			}
-
-			const isMaxStamina = (cachedData.stamina.currentStamina === cachedData.stamina.maxStamina);
-			const isAboveThreshold = (cachedData.stamina.currentStamina > account.stamina.threshold);
-			const staminaAlmostFull = (cachedData.stamina.maxStamina - cachedData.stamina.currentStamina) <= 10 && isAboveThreshold;
-
-			if (isMaxStamina || isAboveThreshold || staminaAlmostFull) {
-				await DataCache.invalidateCache(cachedData.uid);
-				return null;
-			}
-		}
-
-		if (this.#shouldInvalidateExpedition(cachedData, secondsSinceLastUpdate)
-			|| this.#shouldInvalidateShop(cachedData)
-			|| this.#shouldInvalidateRealm(cachedData, secondsSinceLastUpdate)) {
-			await DataCache.invalidateCache(cachedData.uid);
+		const expiration = DataCache.keyvCacheExpiration - (now - cachedData.expires);
+		const projectedData = projectNotesSnapshot(cachedData, { now, rate: this.rate, staminaThreshold });
+		if (expiration <= 0 || projectedData === null) {
+			await this.#delete(key);
 			return null;
 		}
 
-		cachedData.lastUpdate = now;
-		const expiration = Math.max(0, DataCache.keyvCacheExpiration - (now - cachedData.expires));
-		await app.Cache.set({ key: cachedData.uid, value: cachedData, expiry: expiration });
+		await app.Cache.set({ key, value: projectedData, expiry: expiration });
 
-		return cachedData;
+		return projectedData;
 	}
 
-	#shouldInvalidateExpedition (cachedData, secondsSinceLastUpdate) {
-		if (!cachedData.expedition || cachedData.expedition.list.length === 0) {
-			return false;
-		}
+	async invalidateCache (account) {
+		const key = this.#key(account);
+		await DataCache.#withKey(key, async () => {
+			const state = DataCache.#fetches.get(key);
+			if (state) {
+				state.supersededThrough = state.started;
+			}
+			await this.#delete(key);
+		});
+	}
 
-		for (const expedition of cachedData.expedition.list) {
-			expedition.remaining_time = Math.max(0, Number(expedition.remaining_time) - Math.round(secondsSinceLastUpdate));
-			if (expedition.remaining_time <= 0) {
-				return true;
+	static async #withKey (key, operation) {
+		// Keep the read and its write or delete together on the same backend key.
+		const previous = DataCache.#pending.get(key) ?? Promise.resolve();
+		const pending = previous.then(operation, operation);
+		DataCache.#pending.set(key, pending);
+		try {
+			return await pending;
+		}
+		finally {
+			if (DataCache.#pending.get(key) === pending) {
+				DataCache.#pending.delete(key);
 			}
 		}
-
-		return false;
 	}
 
-	#shouldInvalidateShop (cachedData) {
-		return cachedData.shop && cachedData.shop.state === "Finished";
-	}
-
-	#shouldInvalidateRealm (cachedData, secondsSinceLastUpdate) {
-		if (!cachedData.realm) {
-			return false;
-		}
-
-		const realm = cachedData.realm;
-		if (realm.currentCoin === realm.maxCoin) {
-			return true;
-		}
-
-		realm.recoveryTime = Math.max(0, realm.recoveryTime - Math.round(secondsSinceLastUpdate));
-		return realm.recoveryTime <= 0;
-	}
-
-	static async invalidateCache (key) {
+	async #delete (key) {
 		try {
 			if (app.Cache) {
-				await app.Cache.delete(key);
+				await app.Cache.delete(key, { durable: true });
 			}
-			app.Logger.debug("Cache", t `Invalidated cache for key: ${key}`);
+			app.Logger.debug("Cache", t `Invalidated cache for key: ${this.#game}`);
 		}
 		catch (e) {
-			app.Logger.error("Cache", t `Error invalidating cache for key ${key}: ${e.message}`);
+			app.Logger.error("Cache", t `Error invalidating cache for key ${this.#game}: ${e.message}`);
 		}
-	}
-
-	static destroy () {
-		clearInterval(DataCache.expirationInterval);
-		DataCache.data.clear();
 	}
 };

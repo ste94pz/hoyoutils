@@ -118,7 +118,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					},
 					{
 						name: t("Shop Status"),
-						value: t(data.shop.state),
+						value: t(data.shop?.state ?? "Not available"),
 						inline: true
 					},
 					{
@@ -184,7 +184,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					t `Dailies: ${dailies.task}/${dailies.maxTask}`,
 					t `Bounty Commission: ${weeklies.bounty}/${weeklies.bountyTotal}`,
 					t `Survey Points: ${weeklies.surveyPoints}/${weeklies.surveyPointsTotal}`,
-					t `Shop Status: ${t(data.shop.state)}`,
+					t `Shop Status: ${t(data.shop?.state ?? "Not available")}`,
 					t `Howl Scratch Card: ${t(data.cardSign)}`
 				].join("\n");
 			}

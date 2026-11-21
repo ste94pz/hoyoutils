@@ -1,4 +1,5 @@
 const { t } = require("../../localization/index.js");
+const requestNotes = require("../notes-request.js");
 
 module.exports = class RealtimeNotes {
 	/** @type {import("../template")} */
@@ -13,23 +14,11 @@ module.exports = class RealtimeNotes {
 	}
 
 	async notes (accountData) {
-		const cachedData = await this.#instance.dataCache.get(accountData.uid);
+		const assets = { logo: this.#logo, color: this.#color };
+		return await requestNotes(this.#instance, accountData, assets, saveSnapshot => this.#fetchNotes(accountData, saveSnapshot));
+	}
 
-		const { threshold } = accountData.stamina;
-		if (cachedData && cachedData.stamina.currentStamina < threshold) {
-			return {
-				success: true,
-				data: {
-					...cachedData,
-					assets: {
-						...this.#instance.config.assets,
-						logo: this.#logo,
-						color: this.#color
-					}
-				}
-			};
-		}
-
+	async #fetchNotes (accountData, saveSnapshot) {
 		const res = await app.Got("HoYoLabHSRGameRecordDesktopWeb", {
 			url: this.#instance.config.url.notes,
 			responseType: "json",
@@ -99,11 +88,13 @@ module.exports = class RealtimeNotes {
 			tournUnlocked: data.rogue_tourn_weekly_unlocked
 		};
 
-		await this.#instance.dataCache.set(accountData.uid, {
+		const cacheMetadata = {
 			uid: accountData.uid,
 			nickname: accountData.nickname,
 			lastUpdate: app.Date.now(),
-			expires: app.Date.now(),
+			expires: app.Date.now()
+		};
+		const snapshot = {
 			stamina,
 			dailies,
 			weeklies,
@@ -115,22 +106,14 @@ module.exports = class RealtimeNotes {
 					remaining_time: i.remaining_time
 				}))
 			}
-		});
+		};
+
+		await saveSnapshot({ ...cacheMetadata, ...snapshot });
 
 		return {
 			success: true,
 			data: {
-				stamina,
-				dailies,
-				weeklies,
-				expedition: {
-					completed: data.expeditions.every(i => i.status.toLowerCase() === "finished"),
-					list: data.expeditions.map(i => ({
-						avatar: i.avatars,
-						status: i.status,
-						remaining_time: i.remaining_time
-					}))
-				},
+				...snapshot,
 				assets: {
 					...this.#instance.config.assets,
 					logo: this.#logo,

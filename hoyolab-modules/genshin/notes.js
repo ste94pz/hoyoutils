@@ -1,4 +1,5 @@
 const { t } = require("../../localization/index.js");
+const requestNotes = require("../notes-request.js");
 
 module.exports = class RealtimeNotes {
 	/** @type {import("../template")} */
@@ -13,23 +14,11 @@ module.exports = class RealtimeNotes {
 	}
 
 	async notes (accountData) {
-		const cachedData = await this.#instance.dataCache.get(accountData.uid);
+		const assets = { logo: this.#logo, color: this.#color };
+		return await requestNotes(this.#instance, accountData, assets, saveSnapshot => this.#fetchNotes(accountData, saveSnapshot));
+	}
 
-		const { threshold } = accountData.stamina;
-		if (cachedData && cachedData.stamina.currentStamina < threshold) {
-			return {
-				success: true,
-				data: {
-					...cachedData,
-					assets: {
-						...this.#instance.config.assets,
-						logo: this.#logo,
-						color: this.#color
-					}
-				}
-			};
-		}
-
+	async #fetchNotes (accountData, saveSnapshot) {
 		const res = await app.Got("HoYoLabGameRecordAppWebView", {
 			url: this.#instance.config.url.notes,
 			responseType: "json",
@@ -103,11 +92,13 @@ module.exports = class RealtimeNotes {
 			recoveryTime: data.home_coin_recovery_time
 		};
 
-		await this.#instance.dataCache.set(accountData.uid, {
+		const cacheMetadata = {
 			uid: accountData.uid,
 			nickname: accountData.nickname,
 			lastUpdate: app.Date.now(),
-			expires: app.Date.now(),
+			expires: app.Date.now()
+		};
+		const snapshot = {
 			stamina,
 			dailies,
 			weeklies,
@@ -120,23 +111,14 @@ module.exports = class RealtimeNotes {
 					remaining_time: i.remained_time
 				}))
 			}
-		});
+		};
+
+		await saveSnapshot({ ...cacheMetadata, ...snapshot });
 
 		return {
 			success: true,
 			data: {
-				stamina,
-				dailies,
-				weeklies,
-				realm,
-				expedition: {
-					completed: data.expeditions.every(i => i.status.toLowerCase() === "finished"),
-					list: data.expeditions.map(i => ({
-						avatar: i.avatar_side_icon,
-						status: i.status,
-						remaining_time: i.remained_time
-					}))
-				},
+				...snapshot,
 				assets: {
 					...this.#instance.config.assets,
 					logo: this.#logo,

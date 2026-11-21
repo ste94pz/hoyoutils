@@ -35,6 +35,15 @@ const createHttpHarness = async (t, config = {}) => {
 	const replies = [];
 	const globalDefinition = definitions.find((definition) => definition.name === "Global");
 	const globalOptions = globalDefinition.options();
+	const createResponse = ({ body = { retcode: 0 }, statusCode = 200 } = {}) => (
+		Object.assign(Readable.from([JSON.stringify(body)]), {
+			statusCode,
+			statusMessage: "Synthetic response",
+			headers: { "content-type": "application/json" },
+			rawHeaders: ["content-type", "application/json"],
+			trailers: {}
+		})
+	);
 	const capture = (options) => {
 		requests.push({
 			url: new URL(options.url),
@@ -50,14 +59,8 @@ const createHttpHarness = async (t, config = {}) => {
 				beforeError: [...options.hooks.beforeError]
 			}
 		});
-		const { body = { retcode: 0 }, statusCode = 200 } = replies.shift() ?? {};
-		return Object.assign(Readable.from([JSON.stringify(body)]), {
-			statusCode,
-			statusMessage: "Synthetic response",
-			headers: { "content-type": "application/json" },
-			rawHeaders: ["content-type", "application/json"],
-			trailers: {}
-		});
+		const reply = replies.shift();
+		return typeof reply === "function" ? reply().then(createResponse) : createResponse(reply ?? undefined);
 	};
 	const offlineGlobal = {
 		...globalDefinition,
