@@ -123,6 +123,7 @@ for (const language of [undefined, "it-it"]) {
 
 for (const [name, response] of [
 	["HTTP error", { statusCode: 403, body: { retcode: 0 } }],
+	["HTTP error with a Diary rate-limit code", { statusCode: 403, body: { retcode: -500001 } }],
 	["API error", { body: { retcode: -100 } }],
 	["missing data", { body: { retcode: 0 } }],
 	["missing month_data", { body: { retcode: 0, data: { current_primogems: 100, current_mora: 5000, group_by: []} } }],
@@ -132,10 +133,11 @@ for (const [name, response] of [
 	["invalid total", summary({ current_mora: "5000" })]
 ]) {
 	test(`Diary rejects ${name} without caching partial data`, async (t) => {
-		const { game, replies, writes, logs } = await setup(t);
+		const { game, replies, requests, writes, logs } = await setup(t);
 		replies.push(card(), summary(), response);
 		await game.login();
 		assert.deepEqual(await game.diary(game.accounts[0]), { success: false });
+		assert.equal(requests.length, 3);
 		assert.equal(writes.length, 0);
 		assert.equal(JSON.stringify(logs).includes("synthetic-token"), false);
 	});

@@ -1,6 +1,7 @@
 const { t } = require("../../localization/index.js");
 const timers = require("node:timers/promises");
 const { getLanguage } = require("../../gots/hoyolab-contexts/language.js");
+const requestDiaryMonth = require("../diary-month-request.js");
 
 module.exports = class Diary {
 	/** @type {import("../template")} */
@@ -77,7 +78,7 @@ module.exports = class Diary {
 	}
 
 	async fetchMonth (accountData, month, retryCount = 0) {
-		const response = await app.Got("HoYoLabAppWebView", {
+		const response = await requestDiaryMonth(() => app.Got("HoYoLabAppWebView", {
 			url: this.#instance.config.url.diary,
 			responseType: "json",
 			searchParams: {
@@ -87,15 +88,10 @@ module.exports = class Diary {
 				lang: getLanguage()
 			},
 			headers: { Cookie: accountData.cookie }
-		});
+		}), `${this.#instance.fullName}:Diary`, retryCount);
 
 		if (!response.ok) {
 			throw new Error("Diary HTTP request failed");
-		}
-		if (response.body?.retcode === -500001 && retryCount < 3) {
-			app.Logger.debug(`${this.#instance.fullName}:Diary`, `Rate limited, retrying in 5s... (attempt ${retryCount + 1}/3)`);
-			await timers.setTimeout(5000);
-			return this.fetchMonth(accountData, month, retryCount + 1);
 		}
 		if (response.body?.retcode !== 0) {
 			throw new Error("Diary API request failed");
