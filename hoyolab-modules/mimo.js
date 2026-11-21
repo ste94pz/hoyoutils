@@ -13,6 +13,16 @@ const { t } = require("../localization/index.js");
 const requestWithEventBackoff = require("./event-rate-limit.js");
 const getHttpResponseDiagnostic = require("./http-response-diagnostic.js");
 const { buildMimoRequest } = require("./mimo-request.js");
+const {
+	MimoShopItemStatus,
+	MimoPolicyMode,
+	formatInventorySignature,
+	isNewInventory,
+	isSnapshotCompatible,
+	getShopThresholds,
+	buildShopPlanSnapshot,
+	restoreShopPlanItems
+} = require("./mimo-shop-plan.js");
 const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 
 // Task status enum matching HoYoLab API
@@ -24,20 +34,6 @@ const MimoTaskStatus = {
 
 // Task types that can be auto-completed via API
 const FinishableTaskTypes = [1, 2]; // FINISHABLE, VISIT
-
-// Shop item status
-const MimoShopItemStatus = {
-	EXCHANGEABLE: 1, // Available to buy
-	NOT_EXCHANGEABLE: 2, // Waiting for shared stock to be replenished
-	LIMIT_REACHED: 3, // Personal limit reached
-	SOLD_OUT: 4 // Out of stock
-};
-
-const MimoPolicyMode = {
-	ALWAYS: "always",
-	CONDITIONAL: "conditional",
-	NEVER: "never"
-};
 
 const MimoItemCategory = {
 	PREMIUM_CURRENCY: "premiumCurrency",
@@ -63,7 +59,6 @@ const CosmeticKeywords = [
 	"namecard"
 ];
 
-const ShopPlanFormatVersion = 2;
 const RunningAccounts = new Set();
 
 module.exports = class TravelingMimo {
@@ -482,18 +477,6 @@ module.exports = class TravelingMimo {
 			|| { category, mode: MimoPolicyMode.NEVER };
 	}
 
-	#buildInventorySignature (shopItems = []) {
-		return shopItems
-			.map(item => {
-				const id = item.id ?? "";
-				const cost = Number(item.cost) || 0;
-				const name = (item.policyName || item.name || "").toLowerCase();
-				return `${id}:${cost}:${name}`;
-			})
-			.sort((a, b) => a.localeCompare(b))
-			.join("|");
-	}
-
 	#normalizeTimestamp (value) {
 		if (value === null || typeof value === "undefined") {
 			return null;
@@ -559,36 +542,6 @@ module.exports = class TravelingMimo {
 		}
 	}
 
-	#isNewInventory (previousSnapshot, currentSnapshot) {
-		if (!previousSnapshot) {
-			return true;
-		}
-
-		return previousSnapshot.versionId !== currentSnapshot.versionId
-			|| previousSnapshot.durationStart !== currentSnapshot.durationStart
-			|| previousSnapshot.durationEnd !== currentSnapshot.durationEnd
-			|| previousSnapshot.signature !== currentSnapshot.signature;
-	}
-
-	#isSnapshotCompatible (snapshot, meta) {
-		if (!snapshot?.items || typeof snapshot.items !== "object") {
-			return false;
-		}
-
-		return snapshot.formatVersion === ShopPlanFormatVersion
-			&& snapshot.versionId === meta.versionId
-			&& snapshot.durationStart === meta.durationStart
-			&& snapshot.durationEnd === meta.durationEnd;
-	}
-
-	#getTrackedItem (snapshot, itemId) {
-		if (!snapshot?.items || typeof snapshot.items !== "object") {
-			return null;
-		}
-
-		return snapshot.items[itemId] ?? null;
-	}
-
 	#isItemExhausted (item, trackedItem, purchases) {
 		const name = item.policyName || item.name;
 		if (purchases.some(purchase => purchase.name === name && purchase.cost === Number(item.cost))) {
@@ -623,7 +576,7 @@ module.exports = class TravelingMimo {
 		const items = shopItems.map(item => {
 			const category = this.#getItemCategory(item);
 			const rule = this.#getPolicyRule(category, policyRules);
-			const trackedItem = this.#getTrackedItem(snapshot, item.id);
+			const trackedItem = snapshot?.items[item.id] ?? null;
 
 			return {
 				...item,
@@ -649,78 +602,8 @@ module.exports = class TravelingMimo {
 		});
 	}
 
-	#getFutureLiability (item, durationEnd, now) {
-		if (item.mode === MimoPolicyMode.NEVER || item.exhausted) {
-			return 0;
-		}
-
-		if (item.status === MimoShopItemStatus.SOLD_OUT && !(item.nextRefreshTime > 0)) {
-			return 0;
-		}
-
-		if ([MimoShopItemStatus.NOT_EXCHANGEABLE, MimoShopItemStatus.SOLD_OUT].includes(item.status) && item.nextRefreshTime > 0
-			&& Number.isFinite(durationEnd) && now + item.nextRefreshTime * 1000 >= durationEnd) {
-			return 0;
-		}
-
-		// Weekly restocks replenish global stock; every reward is once per version.
-		return item.cost;
-	}
-
-	#getThresholds (items, options = {}) {
-		const reservePoints = options.reservePoints ?? 0;
-		const now = options.now ?? Date.now();
-
-		let alwaysThreshold = 0;
-		let conditionalThreshold = 0;
-
-		for (const item of items) {
-			const liability = this.#getFutureLiability(item, options.durationEnd, now);
-			if (item.mode === MimoPolicyMode.ALWAYS) {
-				alwaysThreshold += liability;
-			}
-			else if (item.mode === MimoPolicyMode.CONDITIONAL) {
-				conditionalThreshold += liability;
-			}
-		}
-
-		// The configured floor applies to lottery spending, after guaranteed rewards.
-		const thresholdAlways = alwaysThreshold;
-		const thresholdConditional = Math.max(alwaysThreshold + conditionalThreshold, reservePoints);
-
-		return {
-			rawAlways: alwaysThreshold,
-			rawConditional: alwaysThreshold + conditionalThreshold,
-			thresholdAlways,
-			thresholdConditional
-		};
-	}
-
 	#isItemExchangeable (item) {
 		return item.status === MimoShopItemStatus.EXCHANGEABLE && !item.exhausted;
-	}
-
-	#buildShopPlanSnapshot (currentSnapshot, items, now) {
-		const trackedItems = {};
-		for (const item of items) {
-			trackedItems[item.id] = {
-				id: item.id,
-				name: item.name,
-				policyName: item.policyName || item.name,
-				cost: item.cost,
-				status: item.status,
-				nextRefreshAt: item.nextRefreshTime > 0 ? now + item.nextRefreshTime * 1000 : null,
-				exhausted: item.exhausted,
-				updatedAt: now
-			};
-		}
-
-		return {
-			...currentSnapshot,
-			formatVersion: ShopPlanFormatVersion,
-			items: trackedItems,
-			updatedAt: now
-		};
 	}
 
 	#markItemPurchased (item) {
@@ -846,7 +729,7 @@ module.exports = class TravelingMimo {
 		if (shopItems.success) {
 			const currentSnapshot = {
 				...currentMeta,
-				signature: this.#buildInventorySignature(shopItems.data)
+				signature: formatInventorySignature(shopItems.data)
 			};
 			let purchases = [];
 			if (shopPolicyEnabled) {
@@ -859,7 +742,7 @@ module.exports = class TravelingMimo {
 				}
 			}
 
-			const compatibleSnapshot = this.#isSnapshotCompatible(shopPlanSnapshot, currentMeta) ? shopPlanSnapshot : null;
+			const compatibleSnapshot = isSnapshotCompatible(shopPlanSnapshot, currentMeta) ? shopPlanSnapshot : null;
 			const plannedItems = shopPolicyEnabled
 				? this.#buildShopPlanItems(shopItems.data, policyRules, compatibleSnapshot, purchases)
 				: this.#getPremiumCurrencyItems(shopItems.data).sort((a, b) => b.cost - a.cost);
@@ -873,8 +756,8 @@ module.exports = class TravelingMimo {
 			}));
 
 			if (shopPolicyEnabled) {
-				const inventoryChanged = this.#isNewInventory(shopPlanSnapshot, currentSnapshot);
-				const thresholds = this.#getThresholds(plannedItems, budgetOptions);
+				const inventoryChanged = isNewInventory(shopPlanSnapshot, currentSnapshot);
+				const thresholds = getShopThresholds(plannedItems, budgetOptions);
 				thresholdAlways = thresholds.thresholdAlways;
 				thresholdConditional = thresholds.thresholdConditional;
 				thresholdSource = "live";
@@ -894,7 +777,7 @@ module.exports = class TravelingMimo {
 
 				await this.#saveShopPlanSnapshot(
 					accountData,
-					this.#buildShopPlanSnapshot({
+					buildShopPlanSnapshot({
 						...currentSnapshot,
 						thresholdAlways,
 						thresholdConditional
@@ -916,7 +799,7 @@ module.exports = class TravelingMimo {
 				}
 
 				if (shopPolicyEnabled && item.mode === MimoPolicyMode.CONDITIONAL) {
-					const currentThresholds = this.#getThresholds(plannedItems, budgetOptions);
+					const currentThresholds = getShopThresholds(plannedItems, budgetOptions);
 					if ((results.points - item.cost) < currentThresholds.thresholdAlways) {
 						continue;
 					}
@@ -930,14 +813,14 @@ module.exports = class TravelingMimo {
 					this.#markItemPurchased(item);
 
 					if (shopPolicyEnabled) {
-						const thresholds = this.#getThresholds(plannedItems, budgetOptions);
+						const thresholds = getShopThresholds(plannedItems, budgetOptions);
 						thresholdAlways = thresholds.thresholdAlways;
 						thresholdConditional = thresholds.thresholdConditional;
 						thresholdSource = "live";
 
 						await this.#saveShopPlanSnapshot(
 							accountData,
-							this.#buildShopPlanSnapshot({
+							buildShopPlanSnapshot({
 								...currentSnapshot,
 								thresholdAlways,
 								thresholdConditional
@@ -960,20 +843,17 @@ module.exports = class TravelingMimo {
 			}
 
 			if (shopPolicyEnabled) {
-				const thresholds = this.#getThresholds(plannedItems, budgetOptions);
+				const thresholds = getShopThresholds(plannedItems, budgetOptions);
 				thresholdAlways = thresholds.thresholdAlways;
 				thresholdConditional = thresholds.thresholdConditional;
 				thresholdSource = "live";
 			}
 		}
 		else if (shopPolicyEnabled) {
-			if (this.#isSnapshotCompatible(shopPlanSnapshot, currentMeta)) {
-				const cachedItems = Object.values(shopPlanSnapshot.items).map(item => ({
-					...item,
-					nextRefreshTime: item.nextRefreshAt ? Math.max(0, (item.nextRefreshAt - now) / 1000) : 0
-				}));
+			if (isSnapshotCompatible(shopPlanSnapshot, currentMeta)) {
+				const cachedItems = restoreShopPlanItems(shopPlanSnapshot, now);
 				const plannedItems = this.#buildShopPlanItems(cachedItems, policyRules, shopPlanSnapshot);
-				const thresholds = this.#getThresholds(plannedItems, budgetOptions);
+				const thresholds = getShopThresholds(plannedItems, budgetOptions);
 				thresholdAlways = thresholds.thresholdAlways;
 				thresholdConditional = thresholds.thresholdConditional;
 				thresholdSource = "cache";

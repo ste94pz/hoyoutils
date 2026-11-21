@@ -310,6 +310,149 @@ test("upstream shop policy reserves unavailable guaranteed rewards and saves its
 	assert.ok(writes.length > 0);
 });
 
+const shopPlanKey = "starrail:mimo:shop-policy:6:role";
+const shopPlanTime = 1_800_000_000_000;
+const shopPlanMeta = {
+	versionId: 999,
+	durationStart: shopPlanTime - 60_000,
+	durationEnd: shopPlanTime + 60_000
+};
+const policyAccount = {
+	...account,
+	mimo: {
+		lottery: true,
+		reservePoints: 45,
+		shopPolicy: [{ category: "gameMaterials", mode: "conditional" }]
+	}
+};
+
+const shopGameInfo = points => ({
+	success: true,
+	data: { versionId: shopPlanMeta.versionId, startTime: shopPlanMeta.durationStart, endTime: shopPlanMeta.durationEnd, points }
+});
+
+const cachedJade = {
+	id: 7,
+	name: "Stellar Jade",
+	policyName: "Stellar Jade",
+	cost: 40,
+	status: 2,
+	nextRefreshAt: shopPlanTime + 30_000,
+	exhausted: false,
+	updatedAt: shopPlanTime - 1000
+};
+const cachedMaterial = {
+	...cachedJade, id: 8, name: "Material", policyName: "Material", cost: 20
+};
+const shopPlanFixture = {
+	...shopPlanMeta,
+	formatVersion: 2,
+	signature: "7:40:stellar jade|8:20:material",
+	thresholdAlways: 0,
+	thresholdConditional: 0,
+	items: { 7: cachedJade, 8: cachedMaterial },
+	updatedAt: shopPlanTime - 1000
+};
+
+for (const [label, snapshot, points, expectedInfoCalls, expectedDraws] of [
+	["restock before season end", shopPlanFixture, 79, 1, 0],
+	["exact safe surplus", shopPlanFixture, 80, 2, 1],
+	["restock at season end and static floor", {
+		...shopPlanFixture, items: { ...shopPlanFixture.items, 7: { ...cachedJade, nextRefreshAt: shopPlanMeta.durationEnd } }
+	}, 65, 2, 1],
+	["sold-out reward with expired restock", {
+		...shopPlanFixture, items: { ...shopPlanFixture.items, 7: { ...cachedJade, status: 4, nextRefreshAt: shopPlanTime - 1000 } }
+	}, 65, 2, 1],
+	["missing snapshot", undefined, 100, 0, 0],
+	["legacy format", { ...shopPlanFixture, formatVersion: 1 }, 100, 0, 0],
+	["invalid items", { ...shopPlanFixture, items: "invalid" }, 100, 0, 0],
+	["different version", { ...shopPlanFixture, versionId: 998 }, 100, 0, 0],
+	["different season start", { ...shopPlanFixture, durationStart: null }, 100, 0, 0],
+	["different season end", { ...shopPlanFixture, durationEnd: null }, 100, 0, 0]
+]) {
+	test(`Mimo restores shop reserves when the shop is unavailable: ${label}`, async t => {
+		const { mimo, requests } = await setup(t);
+		t.mock.method(Date, "now", () => shopPlanTime);
+		flow(mimo);
+		mimo.getGameInfo = async () => shopGameInfo(points);
+		mimo.getShopItems = async () => ({ success: false });
+		const getCache = t.mock.method(app.Cache, "get", async () => structuredClone(snapshot));
+		const setCache = t.mock.method(app.Cache, "set");
+		const lotteryInfo = t.mock.method(mimo, "getLotteryInfo", async () => ({
+			success: true, data: { cost: 20, currentCount: 0, limitCount: 1 }
+		}));
+		const draw = t.mock.method(mimo, "drawLottery", async () => ({ success: true, data: { name: "Prize" } }));
+
+		const result = await mimo.run(policyAccount);
+		assert.equal(result.success, true);
+		assert.equal(lotteryInfo.mock.callCount(), expectedInfoCalls);
+		assert.equal(draw.mock.callCount(), expectedDraws);
+		assert.equal(result.data.lotteryDraws.length, expectedDraws);
+		assert.deepEqual(getCache.mock.calls.map(call => call.arguments), [[shopPlanKey]]);
+		assert.equal(setCache.mock.callCount(), 0);
+		assert.equal(requests.length, 0);
+	});
+}
+
+test("Mimo keeps inventory identity across reordering and rebuilds reserves after a price change and purchase", async t => {
+	const { mimo, logs, requests } = await setup(t);
+	t.mock.method(Date, "now", () => shopPlanTime);
+	flow(mimo);
+	let points = 55;
+	mimo.getGameInfo = async () => shopGameInfo(points);
+	const entry = { ...policyAccount, mimo: { ...policyAccount.mimo, reservePoints: 15 } };
+	let jade = { id: 7, name: "Stellar Jade", cost: 40, status: 4, nextRefreshTime: 30 };
+	const material = { id: 8, name: "Material", cost: 20, status: 1 };
+	mimo.getShopItems = async () => ({ success: true, data: [material, jade]});
+	mimo.getShopPurchases = async () => ({ success: false });
+	await app.Cache.set({
+		key: shopPlanKey,
+		value: { ...shopPlanFixture, items: { ...shopPlanFixture.items, 7: { ...cachedJade, exhausted: true } } }
+	});
+	const setCache = t.mock.method(app.Cache, "set");
+	const exchange = t.mock.method(mimo, "exchangeItem", async () => ({ success: true, data: {} }));
+	mimo.getLotteryInfo = async () => ({ success: true, data: { cost: 20, currentCount: 0, limitCount: 1 } });
+	const draw = t.mock.method(mimo, "drawLottery", async () => ({ success: true, data: { name: "Prize" } }));
+
+	const first = await mimo.run(entry);
+	assert.equal(first.success, true);
+	assert.deepEqual(first.data.itemsExchanged.map(item => item.name), ["Material"]);
+	assert.equal(draw.mock.callCount(), 1);
+	assert.ok(logs.some(([, message]) => message.includes("Inventory unchanged")));
+	const [beforePurchase, afterPurchase] = setCache.mock.calls.map(call => call.arguments[0].value);
+	assert.deepEqual(beforePurchase, {
+		...shopPlanFixture,
+		thresholdAlways: 0,
+		thresholdConditional: 20,
+		items: {
+			7: { ...cachedJade, status: 4, exhausted: true, updatedAt: shopPlanTime },
+			8: { ...cachedMaterial, status: 1, nextRefreshAt: null, updatedAt: shopPlanTime }
+		},
+		updatedAt: shopPlanTime
+	});
+	assert.deepEqual(afterPurchase, {
+		...beforePurchase,
+		thresholdConditional: 15,
+		items: { ...beforePurchase.items, 8: { ...beforePurchase.items[8], status: 3, exhausted: true } }
+	});
+
+	jade = { ...jade, cost: 50 };
+	points = 65;
+	const second = await mimo.run(entry);
+	assert.equal(second.success, true);
+	assert.deepEqual(second.data.itemsExchanged, []);
+	assert.equal(draw.mock.callCount(), 1);
+	assert.ok(logs.some(([, message]) => message.includes("New inventory detected")));
+	assert.deepEqual(exchange.mock.calls.map(call => call.arguments.slice(1)), [[8, 999]]);
+	const rebuilt = setCache.mock.calls[2].arguments[0].value;
+	assert.equal(rebuilt.signature, "7:50:stellar jade|8:20:material");
+	assert.equal(rebuilt.items[7].exhausted, false);
+	assert.equal(rebuilt.thresholdAlways, 50);
+	assert.equal(rebuilt.thresholdConditional, 70);
+	assert.deepEqual(setCache.mock.calls.map(call => call.arguments[0].key), new Array(3).fill(shopPlanKey));
+	assert.equal(requests.length, 0);
+});
+
 test("overlapping scheduled, restock and manual Mimo runs share the account guard", async (t) => {
 	const { mimo } = await setup(t);
 	flow(mimo);
