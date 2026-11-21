@@ -1,6 +1,9 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const { readFileSync } = require("node:fs");
+const { createRequire } = require("node:module");
 const timers = require("node:timers/promises");
+const { runInNewContext } = require("node:vm");
 const { createHttpHarness } = require("./helpers/http.js");
 const HoyoLab = require("../hoyolab-modules/template.js");
 const { buildMimoRequest } = require("../hoyolab-modules/mimo-request.js");
@@ -121,6 +124,58 @@ test("rate-limit retries retain backoff and stop after ten attempts", async t =>
 	assert.deepEqual(await mimo.finishTask(account, 1, 99), { success: false, message: "Final rate-limit response" });
 	assert.equal(requests.length, 10);
 	assert.deepEqual(delays, new Array(9).fill(500));
+});
+
+test("Mimo failure logs contain only the operation and numeric response metadata", async t => {
+	const { mimo, replies, logs } = await setup(t);
+	const response = { statusCode: 403,
+		body: { retcode: -100, message: "ltoken_v2=synthetic-secret", data: { uid: "synthetic-role" } } };
+	const taskId = "synthetic-task";
+	const awardId = "synthetic-award";
+	for (const [run, message] of [
+		[() => mimo.getGameInfo(account), "Failed to fetch Mimo game info"],
+		[() => mimo.getTasks(account, 99), "Failed to fetch Mimo tasks"],
+		[() => mimo.finishTask(account, taskId, 99), "Failed to finish Mimo task"],
+		[() => mimo.claimTaskReward(account, taskId, 99), "Failed to claim Mimo task reward"],
+		[() => mimo.getShopItems(account, 99), "Failed to fetch Mimo shop items"],
+		[() => mimo.exchangeItem(account, awardId, 99), "Failed to exchange Mimo item"],
+		[() => mimo.drawLottery(account, 99), "Failed to draw lottery"]
+	]) {
+		replies.push(response);
+		assert.deepEqual(await run(), { success: false, message: response.body.message });
+		assert.deepEqual(logs.splice(0), [["Synthetic Game:Mimo", { message, args: { httpStatus: 403, retcode: -100 } }]]);
+	}
+});
+
+test("Mimo cron keeps the server message in the critical notification only", async () => {
+	const logs = [];
+	const notifications = [];
+	const message = "Synthetic cookie failure";
+	const cronAccount = { uid: "synthetic-role", game: { name: "Honkai: Star Rail" } };
+	const cronPath = require.resolve("../crons/mimo/index.js");
+	const requireCron = createRequire(cronPath);
+	const context = {
+		module: { exports: {} },
+		require: name => name === "../../config.js" ? {} : requireCron(name),
+		app: {
+			Logger: { warn: (tag, details) => logs.push([tag, { ...details }]) },
+			HoyoLab: {
+				getActiveAccounts: () => [cronAccount],
+				get: () => ({ mimo: async () => ({ success: false, message }) }),
+				getRegion: () => "EU"
+			},
+			Platform: {
+				getForAccount: () => [{ name: "telegram", send: async text => notifications.push(text) }],
+				getEmbedPlatforms: () => []
+			},
+			Utils: { escapeCharacters: text => text }
+		}
+	};
+	runInNewContext(readFileSync(cronPath, "utf8"), context);
+	await context.module.exports.code({ gameName: "starrail" });
+	assert.deepEqual(logs, [["Cron:Mimo", { message: "Mimo automation failed", game: "starrail" }]]);
+	assert.equal(notifications.length, 1);
+	assert.ok(notifications[0].includes(message));
 });
 
 test("a transport rejection after a rate limit propagates without another retry", async t => {

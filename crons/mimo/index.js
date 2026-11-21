@@ -54,9 +54,7 @@ module.exports = {
 					if (!result.success) {
 						app.Logger.warn("Cron:Mimo", {
 							message: t("Mimo automation failed"),
-							game: gameName,
-							uid: account.uid,
-							error: result.message
+							game: gameName
 						});
 
 						const isCriticalError = result.message?.toLowerCase().includes("cookie")

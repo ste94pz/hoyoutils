@@ -11,6 +11,7 @@ const { t } = require("../localization/index.js");
  */
 
 const requestWithEventBackoff = require("./event-rate-limit.js");
+const getHttpResponseDiagnostic = require("./http-response-diagnostic.js");
 const { buildMimoRequest } = require("./mimo-request.js");
 const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 
@@ -101,7 +102,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to fetch Mimo game info"),
-				args: { body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return {
 				success: false,
@@ -150,7 +151,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to fetch Mimo tasks"),
-				args: { body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return {
 				success: false,
@@ -192,7 +193,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to finish Mimo task"),
-				args: { taskId, body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return { success: false, message: res.body?.message };
 		}
@@ -221,7 +222,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to claim Mimo task reward"),
-				args: { taskId, body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return { success: false, message: res.body?.message };
 		}
@@ -244,7 +245,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to fetch Mimo shop items"),
-				args: { body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return {
 				success: false,
@@ -336,7 +337,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to exchange Mimo item"),
-				args: { awardId, body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return { success: false, message: res.body?.message };
 		}
@@ -396,7 +397,7 @@ module.exports = class TravelingMimo {
 		if (res.statusCode !== 200 || res.body.retcode !== 0) {
 			app.Logger.log(`${this.#instance.fullName}:Mimo`, {
 				message: t("Failed to draw lottery"),
-				args: { body: res.body }
+				args: getHttpResponseDiagnostic(res)
 			});
 			return { success: false, message: res.body?.message };
 		}
