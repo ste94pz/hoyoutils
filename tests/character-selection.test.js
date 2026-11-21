@@ -108,11 +108,56 @@ for (const reply of [{ statusCode: 503 }, { body: { retcode: -100, message: cook
 }
 
 
-for (const hilichurl of [{ bindCharacter: true }, { bindCharacter: "true" }]) {
-	test(`invalid Hilichurl binding settings are rejected: ${JSON.stringify(hilichurl)}`, async t => {
+const genshinCharacter = { uid: "222", region: "os_euro" };
+const bindingRequired = "Hilichurl binding requires an explicit Genshin character selection.";
+const bindingTypeError = "hilichurl.bindCharacter must be a boolean.";
+
+for (const [label, character, hilichurl] of [
+	["absent", undefined, undefined],
+	["empty", undefined, {}],
+	["disabled", undefined, { bindCharacter: false }],
+	["enabled with a selected Genshin character", genshinCharacter, { bindCharacter: true }]
+]) {
+	test(`Hilichurl binding consent is accepted when ${label}`, async t => {
 		const { requests } = await setup(t);
 		const Genshin = require("../hoyolab-modules/genshin/index.js");
-		assert.throws(() => new Genshin({ id: 1, data: [{ ...entry(undefined), hilichurl }]}), /binding requires|must be a boolean/);
+		const controller = new Genshin({ id: 1, data: [{ ...entry(character), hilichurl }]});
+		assert.deepEqual(controller.data[0].character, character);
+		assert.equal(controller.data[0].hilichurl, hilichurl);
+		assert.equal(requests.length, 0);
+	});
+}
+
+for (const [label, game, overrides, message] of [
+	["requires an explicit character before parsing the cookie",
+		"genshin",
+		{ cookie: "invalid", hilichurl: { bindCharacter: true } },
+		bindingRequired],
+	["requires a Genshin character",
+		"starrail",
+		{ character: { uid: "222", region: games[1].region }, hilichurl: { bindCharacter: true } },
+		bindingRequired],
+	["rejects a string before checking character presence",
+		"genshin",
+		{ hilichurl: { bindCharacter: "true" } },
+		bindingTypeError],
+	["rejects null even with a selected character",
+		"genshin",
+		{ character: genshinCharacter, hilichurl: { bindCharacter: null } },
+		bindingTypeError],
+	["follows character normalization",
+		"genshin",
+		{ character: {}, hilichurl: { bindCharacter: "true" } },
+		"Invalid character selection. Configure both character.uid and character.region for a supported game."],
+	["follows expedition validation",
+		"genshin",
+		{ expedition: { check: false }, hilichurl: { bindCharacter: "true" } },
+		"Invalid expedition.persistent provided for HoyoLab expected boolean."]
+]) {
+	test(`Hilichurl binding consent ${label}`, async t => {
+		const { requests } = await setup(t);
+		const Game = require(`../hoyolab-modules/${game}/index.js`);
+		assert.throws(() => new Game({ id: 1, data: [{ ...entry(undefined), ...overrides }]}), { message });
 		assert.equal(requests.length, 0);
 	});
 }

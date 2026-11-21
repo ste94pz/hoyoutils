@@ -9,6 +9,15 @@ const CustomHoyoError = require("./error-messages.js");
 
 const REFRESH_API = "https://sg-public-api.hoyoverse.com/account/ma-passport/token/getBySToken";
 
+const validateHilichurlBindingConsent = (bindCharacter, character, game) => {
+	if (bindCharacter !== undefined && typeof bindCharacter !== "boolean") {
+		throw new app.Error({ message: t("hilichurl.bindCharacter must be a boolean.") });
+	}
+	if (bindCharacter === true && (!character || game !== "genshin")) {
+		throw new app.Error({ message: t("Hilichurl binding requires an explicit Genshin character selection.") });
+	}
+};
+
 const parseCookie = (cookie, separator = ";") => {
 	const result = {};
 	for (const rawPair of cookie.split(separator)) {
@@ -221,13 +230,7 @@ module.exports = class HoyoLab {
 				});
 			}
 
-			if (account.hilichurl?.bindCharacter !== undefined && typeof account.hilichurl.bindCharacter !== "boolean") {
-				throw new app.Error({ message: t("hilichurl.bindCharacter must be a boolean.") });
-			}
-			if (account.hilichurl?.bindCharacter === true && (!character || this.#name !== "genshin")) {
-				throw new app.Error({ message: t("Hilichurl binding requires an explicit Genshin character selection.") });
-			}
-
+			validateHilichurlBindingConsent(account.hilichurl?.bindCharacter, character, this.#name);
 			const parsedCookie = this.#parseCookie(account.cookie);
 			if (redeemCode && ["starrail", "nap"].includes(this.#name) && !parsedCookie.redemptionDeviceUuid) {
 				app.Logger.warn("HoyoLab", `The cookie for ${this.name} is missing _MHYUUID. Configure a newly acquired cookie to enable code redemption.`);
