@@ -74,11 +74,6 @@ module.exports = class UtilsSingleton {
 		return string.replace(/[_[\]()~`>#+\-=|{}.!]/g, "\\$&");
 	}
 
-	cheerio (html) {
-		const cheerio = require("cheerio");
-		return cheerio.load(html);
-	}
-
 	generateDS () {
 		const time = (Date.now() / 1000).toFixed(0);
 		const random = this.randomString();

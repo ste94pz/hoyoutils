@@ -24,6 +24,7 @@
     "@babel/core": "^7.18.10",
     "@babel/eslint-parser": "^7.18.9",
     "@types/bun": "latest",
+    "cheerio": "^1.0.0-rc.12",
     "eslint": "8.56.0",
     "eslint-plugin-unicorn": "^43.0.2"
   },
@@ -35,7 +36,6 @@
   "main": "index.js",
   "dependencies": {
     "chalk": "4.1.0",
-    "cheerio": "^1.0.0-rc.12",
     "cron": "3.1.6",
     "discord.js": "14.14.1",
     "got": "14.2.1",
