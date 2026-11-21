@@ -397,8 +397,6 @@
 			"If provided, expiry must be a valid positive integer": "Se specificata, la scadenza deve essere un numero intero positivo valido",
 			"Cannot use null or undefined as key": "Non è possibile usare null o undefined come chiave",
 			"Cannot stringify a non-primitive value": "Non è possibile convertire in stringa un valore non primitivo",
-			"Cache prefix keys cannot contain reserved characters": "Le chiavi del prefisso della cache non possono contenere caratteri riservati",
-			"Cache prefix vaolues cannot contain reserved characters": "I valori del prefisso della cache non possono contenere caratteri riservati",
 			"{0} days": "{0} giorni",
 			"{0} hr": "{0} ore",
 			"{0} min": "{0} min",
