@@ -10,7 +10,7 @@ const Config = require("../classes/config.js");
 const { getLanguage, getLanguageOnly } = require("../gots/hoyolab-contexts/language.js");
 
 // Execute the actual setup script against its HTML using the existing parser.
-// Only DOM operations used by a single-account import/export are adapted here;
+// Only DOM operations used by account import/export are adapted here;
 // browser file selection, rendering and download UI are not exercised.
 const createSetup = () => {
 	const html = readFileSync(join(__dirname, "../setup/config/index.html"), "utf8");
@@ -39,6 +39,7 @@ const createSetup = () => {
 				remove: (...names) => element.removeClass(names.join(" "))
 			},
 			addEventListener: () => {},
+			closest: (selector) => wrap(element.closest(selector)),
 			querySelector: (selector) => wrap(element.find(selector).first()),
 			querySelectorAll: (selector) => element.find(selector).toArray().map(node => wrap($(node)))
 		};
@@ -88,6 +89,101 @@ test("setup preserves Tears of Themis redemption opt-in across import/export", a
 		assert.equal(result.active, true);
 		assert.equal(result.data[0].cookie, "synthetic-cookie");
 		assert.equal(result.data[0].redeemCode, value);
+	}
+});
+
+const roundTrip = async (setup, input) => {
+	setup.context.importConfigFromText(input);
+	setup.context.generateConfig();
+	assert.deepEqual(setup.alerts, []);
+	return JSON5.parse(await setup.exportedText());
+};
+
+for (const [type, region, defaultThreshold] of [
+	["genshin", "os_euro", 150],
+	["starrail", "prod_official_eur", 150],
+	["zenless", "prod_gf_eu", 200]
+]) {
+	test(`setup round-trips active and legacy accounts for ${type}`, async () => {
+		const setup = createSetup();
+		const active = {
+			cookie: "synthetic-active",
+			character: { uid: "999", region },
+			redeemCode: true,
+			dailiesCheck: true,
+			stamina: { check: true, threshold: 0, persistent: true },
+			discord: { userId: "123" }
+		};
+		const disabled = {
+			cookie: "synthetic-disabled",
+			redeemCode: false,
+			dailiesCheck: false,
+			stamina: { check: false, threshold: 25, persistent: false },
+			discord: { userId: null }
+		};
+		if (type === "zenless") {
+			active.shopStatus = true;
+			disabled.shopStatus = false;
+		}
+		else {
+			active.weekliesCheck = true;
+			active.expedition = { check: true, persistent: true };
+			disabled.weekliesCheck = false;
+			disabled.expedition = { check: false, persistent: false };
+		}
+		if (type === "genshin") {
+			active.hilichurl = { check: true, redeem: true, bindCharacter: true };
+			active.realm = { check: true, persistent: true };
+			disabled.hilichurl = { check: false, redeem: false, bindCharacter: false };
+			disabled.realm = { check: false, persistent: false };
+		}
+		const data = [active, disabled];
+		const exported = await roundTrip(setup, JSON5.stringify({ accounts: [{ type, active: true, data }]}));
+		assert.deepEqual(exported.accounts.find(account => account.type === type).data, data);
+		const reexported = await roundTrip(setup, JSON5.stringify(exported));
+		assert.deepEqual(reexported.accounts, exported.accounts);
+
+		const legacy = await roundTrip(setup, `{
+			// Legacy config without character selection or optional account flags.
+			accounts: [{ type: '${type}', active: false, data: [{ cookie: 'synthetic-legacy' }] }],
+		}`);
+		const account = legacy.accounts.find(account => account.type === type);
+		assert.equal(account.active, false);
+		assert.deepEqual(account.data, [{
+			...disabled,
+			cookie: "synthetic-legacy",
+			stamina: { check: false, threshold: defaultThreshold, persistent: false },
+			...(type === "genshin" && { hilichurl: { check: false, redeem: true, bindCharacter: false } })
+		}]);
+	});
+}
+
+test("setup exports a character and API locale that Apps Script accepts", async () => {
+	const setup = createSetup();
+	const script = readFileSync(join(__dirname, "../services/google-script/index.js"), "utf8");
+	const appsScript = runInNewContext(`${script}\n({ normalizeScriptAccount, getApiLanguage, config })`);
+	const cookie = "synthetic-shared";
+	const selections = {
+		genshin: { uid: "999", region: "os_euro" },
+		starrail: { uid: "998", region: "prod_official_eur" },
+		zenless: { uid: "997", region: "prod_gf_eu" }
+	};
+	for (const [language, expected] of [[undefined, "en-us"], ["it-it", "it-it"], ["future-region", "future-region"]]) {
+		appsScript.config.language = language;
+		const accounts = Object.entries(selections).map(([type, character]) => ({
+			type, active: true, data: [{ cookie, character, redeemCode: false }, { cookie }]
+		}));
+		const exported = await roundTrip(setup, JSON5.stringify({ language, accounts }));
+		assert.equal(exported.language, expected);
+		assert.equal(appsScript.getApiLanguage(), expected);
+		for (const [type, character] of Object.entries(selections)) {
+			const [selected, automatic] = exported.accounts.find(account => account.type === type).data;
+			const normalize = entry => JSON5.parse(JSON5.stringify(appsScript.normalizeScriptAccount(entry, type)));
+			assert.deepEqual(normalize(selected), { cookie, character });
+			assert.deepEqual(normalize(automatic), { cookie });
+			assert.deepEqual(normalize(cookie), { cookie });
+			assert.throws(() => normalize({ cookie, character: { ...character, uid: "0" } }), /Invalid character selection/);
+		}
 	}
 });
 

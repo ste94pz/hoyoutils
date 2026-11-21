@@ -1125,13 +1125,21 @@
             setBooleanSelectValue(accountElement.querySelector('select[id*="tearsredeemCode"]'), entry.redeemCode, 'manual');
         }
 
-        function fillGenshinAccount(accountElement, data) {
-            const entry = data || {};
+        function fillCharacterAccount(accountElement, entry) {
             setInputValue(accountElement.querySelector('[data-character-uid]'), entry.character?.uid);
             setInputValue(accountElement.querySelector('[data-character-region]'), entry.character?.region);
-            setInputValue(accountElement.querySelector('input[id*="genshinCookie"]'), entry.cookie);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="genshinredeemCode"]'), entry.redeemCode);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="genshindailiesCheck"]'), entry.dailiesCheck);
+            setInputValue(accountElement.querySelector('input[id*="Cookie"]'), entry.cookie);
+            setBooleanSelectValue(accountElement.querySelector('select[id*="redeemCode"]'), entry.redeemCode);
+            setBooleanSelectValue(accountElement.querySelector('select[id*="dailiesCheck"]'), entry.dailiesCheck);
+            setBooleanSelectValue(accountElement.querySelector('select[id*="staminaCheck"]'), entry.stamina?.check);
+            setInputValue(accountElement.querySelector('input[id*="threshold"]'), entry.stamina?.threshold);
+            setBooleanSelectValue(accountElement.querySelector('select[id*="staminapersistent"]'), entry.stamina?.persistent);
+            setInputValue(accountElement.querySelector('input[id*="userId"]'), entry.discord?.userId);
+        }
+
+        function fillGenshinAccount(accountElement, data) {
+            const entry = data || {};
+            fillCharacterAccount(accountElement, entry);
             setBooleanSelectValue(accountElement.querySelector('select[id*="genshinweekliesCheck"]'), entry.weekliesCheck);
 
             setBooleanSelectValue(accountElement.querySelector('#genshinHilichurlCheck'), entry.hilichurl?.check);
@@ -1141,57 +1149,25 @@
             setBooleanSelectValue(accountElement.querySelector('select[id*="genshinrealmCheck"]'), realm.check);
             setBooleanSelectValue(accountElement.querySelector('select[id*="genshinrealmpersistent"]'), realm.persistent);
 
-            const stamina = entry.stamina || {};
-            setBooleanSelectValue(accountElement.querySelector('select[id*="genshinstaminaCheck"]'), stamina.check);
-            setInputValue(accountElement.querySelector('input[id*="genshinthreshold"]'), stamina.threshold);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="genshinstaminapersistent"]'), stamina.persistent);
-
             const expedition = entry.expedition || {};
             setBooleanSelectValue(accountElement.querySelector('select[id*="genshinexpeditionCheck"]'), expedition.check);
             setBooleanSelectValue(accountElement.querySelector('select[id*="genshinexpeditionpersistent"]'), expedition.persistent);
-
-            const discord = entry.discord || {};
-            setInputValue(accountElement.querySelector('input[id*="genshinuserId"]'), discord.userId);
         }
 
         function fillStarRailAccount(accountElement, data) {
             const entry = data || {};
-            setInputValue(accountElement.querySelector('[data-character-uid]'), entry.character?.uid);
-            setInputValue(accountElement.querySelector('[data-character-region]'), entry.character?.region);
-            setInputValue(accountElement.querySelector('input[id*="starrailCookie"]'), entry.cookie);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="starrailredeemCode"]'), entry.redeemCode);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="starraildailiesCheck"]'), entry.dailiesCheck);
+            fillCharacterAccount(accountElement, entry);
             setBooleanSelectValue(accountElement.querySelector('select[id*="starrailweekliesCheck"]'), entry.weekliesCheck);
-
-            const stamina = entry.stamina || {};
-            setBooleanSelectValue(accountElement.querySelector('select[id*="starrailstaminaCheck"]'), stamina.check);
-            setInputValue(accountElement.querySelector('input[id*="starrailthreshold"]'), stamina.threshold);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="starrailstaminapersistent"]'), stamina.persistent);
 
             const expedition = entry.expedition || {};
             setBooleanSelectValue(accountElement.querySelector('select[id*="starrailexpeditionCheck"]'), expedition.check);
             setBooleanSelectValue(accountElement.querySelector('select[id*="starrailexpeditionpersistent"]'), expedition.persistent);
-
-            const discord = entry.discord || {};
-            setInputValue(accountElement.querySelector('input[id*="starrailuserId"]'), discord.userId);
         }
 
         function fillZenlessAccount(accountElement, data) {
             const entry = data || {};
-            setInputValue(accountElement.querySelector('[data-character-uid]'), entry.character?.uid);
-            setInputValue(accountElement.querySelector('[data-character-region]'), entry.character?.region);
-            setInputValue(accountElement.querySelector('input[id*="zenlessCookie"]'), entry.cookie);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessredeemCode"]'), entry.redeemCode);
+            fillCharacterAccount(accountElement, entry);
             setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessshopStatus"]'), entry.shopStatus);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessdailiesCheck"]'), entry.dailiesCheck);
-
-            const stamina = entry.stamina || {};
-            setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessstaminaCheck"]'), stamina.check);
-            setInputValue(accountElement.querySelector('input[id*="zenlessthreshold"]'), stamina.threshold);
-            setBooleanSelectValue(accountElement.querySelector('select[id*="zenlessstaminapersistent"]'), stamina.persistent);
-
-            const discord = entry.discord || {};
-            setInputValue(accountElement.querySelector('input[id*="zenlessuserId"]'), discord.userId);
         }
 
         document.getElementById('copy-settings-zenless').onclick = function () {
@@ -1305,6 +1281,14 @@
                 throw new Error(t('Configure both a numeric character UID and a server, or leave both empty.'));
             }
             return { character: { uid, region } };
+        }
+
+        function readStaminaSettings(accountElement, defaultThreshold) {
+            return {
+                check: accountElement.querySelector('select[id*="staminaCheck"]')?.value === 'true',
+                threshold: parseInt(accountElement.querySelector('input[id*="threshold"]')?.value || defaultThreshold, 10),
+                persistent: accountElement.querySelector('select[id*="staminapersistent"]')?.value === 'true',
+            };
         }
 
         function generateConfig() {
@@ -1428,11 +1412,7 @@
                     redeemCode: accountElement.querySelector('select[id*="zenlessredeemCode"]').value === 'true',
                     shopStatus: accountElement.querySelector('select[id*="zenlessshopStatus"]').value === 'true',
                     dailiesCheck: accountElement.querySelector('select[id*="zenlessdailiesCheck"]').value === 'true',
-                    stamina: {
-                        check: accountElement.querySelector('select[id*="zenlessstaminaCheck"]').value === 'true',
-                        threshold: parseInt(accountElement.querySelector('input[id*="zenlessthreshold"]').value || '200', 10),
-                        persistent: accountElement.querySelector('select[id*="zenlessstaminapersistent"]').value === 'true',
-                    },
+                    stamina: readStaminaSettings(accountElement, '200'),
                     discord: {
                         userId: accountElement.querySelector('input[id*="zenlessuserId"]').value || null,
                     }
@@ -1477,9 +1457,6 @@
             const redeemCodeElement = accountElement.querySelector('select[id*="redeemCode"]');
             const dailiesCheckElement = accountElement.querySelector('select[id*="dailiesCheck"]');
             const weekliesCheckElement = accountElement.querySelector('select[id*="weekliesCheck"]');
-            const thresholdElement = accountElement.querySelector('input[id*="threshold"]');
-            const staminaCheckElement = accountElement.querySelector('select[id*="staminaCheck"]');
-            const staminaPersistentElement = accountElement.querySelector('select[id*="staminapersistent"]');
             const expeditionCheckElement = accountElement.querySelector('select[id*="expeditionCheck"]');
             const expeditionPersistentElement = accountElement.querySelector('select[id*="expeditionpersistent"]');
             const userIdElement = accountElement.querySelector('input[id*="userId"]');
@@ -1498,9 +1475,6 @@
             const redeemCode = redeemCodeElement ? redeemCodeElement.value === 'true' : false;
             const dailiesCheck = dailiesCheckElement ? dailiesCheckElement.value === 'true' : false;
             const weekliesCheck = weekliesCheckElement ? weekliesCheckElement.value === 'true' : false;
-            const threshold = thresholdElement ? parseInt(thresholdElement.value || '150', 10) : 150;
-            const staminaCheck = staminaCheckElement ? staminaCheckElement.value === 'true' : false;
-            const staminaPersistent = staminaPersistentElement ? staminaPersistentElement.value === 'true' : false;
             const expeditionCheck = expeditionCheckElement ? expeditionCheckElement.value === 'true' : false;
             const expeditionPersistent = expeditionPersistentElement ? expeditionPersistentElement.value === 'true' : false;
             let userId = userIdElement ? userIdElement.value : '';
@@ -1529,11 +1503,7 @@
                 };
             }
 
-            accountData.stamina = {
-                check: staminaCheck,
-                threshold: threshold,
-                persistent: staminaPersistent,
-            };
+            accountData.stamina = readStaminaSettings(accountElement, '150');
 
             accountData.expedition = {
                 check: expeditionCheck,
