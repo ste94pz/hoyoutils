@@ -477,11 +477,12 @@ for (const changed of [{ uid: "333" }, { region: "os_usa" }, { bind_uid: undefin
 
 for (const failure of [rejected(), { statusCode: 503 }, { statusCode: 429 }]) {
 	test(`binding failure stops without automatic retries (${failure.statusCode ?? -510001})`, async t => {
-		const { workshop, replies, requests } = await setup(t);
+		const { workshop, replies, requests, delays } = await setup(t);
 		replies.push(eventInfo(false), failure);
 		const result = await workshop.run(selectedAccount(true));
 		assert.equal(result.success, false);
 		assert.equal(requests.length, 2);
+		assert.deepEqual(delays, []);
 		assert.match(result.message, /Failed to bind/);
 	});
 }

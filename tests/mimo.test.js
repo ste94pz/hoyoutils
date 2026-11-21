@@ -114,10 +114,27 @@ test("latent qiuqiu lottery preserves legacy defaults without registering a prof
 test("rate-limit retries retain backoff and stop after ten attempts", async t => {
 	const { mimo, replies, requests, delays } = await setup(t);
 	t.mock.method(Math, "random", () => 0);
-	replies.push(...Array.from({ length: 10 }, () => ({ statusCode: 429, body: { retcode: -500004 } })));
-	assert.equal((await mimo.finishTask(account, 1, 99)).success, false);
+	replies.push(
+		...Array.from({ length: 9 }, () => ({ statusCode: 429, body: { retcode: -500004 } })),
+		{ statusCode: 429, body: { retcode: -500004, message: "Final rate-limit response" } }
+	);
+	assert.deepEqual(await mimo.finishTask(account, 1, 99), { success: false, message: "Final rate-limit response" });
 	assert.equal(requests.length, 10);
 	assert.deepEqual(delays, new Array(9).fill(500));
+});
+
+test("a transport rejection after a rate limit propagates without another retry", async t => {
+	const { mimo, delays } = await setup(t);
+	const failure = new Error("Synthetic transport failure");
+	const send = t.mock.method(app, "Got", async () => ({ statusCode: 429 }));
+	send.mock.mockImplementationOnce(async () => {
+		throw failure;
+	}, 1);
+	t.mock.method(Math, "random", () => 0);
+
+	await assert.rejects(() => mimo.finishTask(account, 1, 99), error => error === failure);
+	assert.equal(send.mock.callCount(), 2);
+	assert.deepEqual(delays, [500]);
 });
 
 const emptyShop = { success: true, data: []};

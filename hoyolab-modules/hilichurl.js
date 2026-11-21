@@ -9,9 +9,9 @@ const { t } = require("../localization/index.js");
  * and has no lottery feature.
  */
 
-const { setTimeout: sleep } = require("node:timers/promises");
 const { getLanguage } = require("../gots/hoyolab-contexts/language.js");
 const { APP_VERSION } = require("../gots/hoyolab-contexts/constants.js");
+const requestWithEventBackoff = require("./event-rate-limit.js");
 const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 const HILICHURL_BASE_URL = "https://sg-public-api.hoyolab.com/event/e2023mimotravel/qiuqiu";
 
@@ -81,39 +81,12 @@ module.exports = class HilichurlWorkshop {
 			requestOptions.json = data || params;
 		}
 
-		// Retry logic with exponential backoff for rate limits
-		const maxRetries = endpoint === "bind-game-info" ? 1 : 10;
-		const baseDelay = 500; // 500ms initial delay
-		const maxDelay = 30000; // 30s max delay
-
-		for (let attempt = 1; attempt <= maxRetries; attempt++) {
-			// Timed desktop completion and ordinary event WebView calls both omit DS.
-			const res = await app.Got(desktopTask ? "HoYoLabDesktopWeb" : "HoYoLabAppWebView", requestOptions);
-
-			// Check for rate limit errors:
-			// - retcode -500004 = VisitsTooFrequently (JSON response)
-			// - HTTP 429 = Too Many Requests
-			// - Body contains "Too Many Requests" string
-			const isRateLimited = res.body?.retcode === -500004
-				|| res.statusCode === 429
-				|| (typeof res.body === "string" && res.body.includes("Too Many Requests"));
-
-			if (isRateLimited) {
-				if (attempt === maxRetries) {
-					app.Logger.warn(`${this.#instance.fullName}:Hilichurl`, t `Rate limited after ${maxRetries} attempts, giving up`);
-					return res;
-				}
-
-				const maxWait = Math.min(baseDelay * (2 ** attempt), maxDelay);
-				const totalDelay = Math.floor(baseDelay + Math.random() * (maxWait - baseDelay));
-
-				app.Logger.info(`${this.#instance.fullName}:Hilichurl`, t `Rate limited, retrying in ${totalDelay}ms (attempt ${attempt}/${maxRetries})`);
-				await sleep(totalDelay);
-				continue;
-			}
-
-			return res;
-		}
+		// Timed desktop completion and ordinary event WebView calls both omit DS.
+		return requestWithEventBackoff(
+			() => app.Got(desktopTask ? "HoYoLabDesktopWeb" : "HoYoLabAppWebView", requestOptions),
+			`${this.#instance.fullName}:Hilichurl`,
+			endpoint === "bind-game-info" ? 1 : 10
+		);
 	}
 
 	async getGameInfo (accountData) {

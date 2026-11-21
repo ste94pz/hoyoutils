@@ -10,7 +10,7 @@ const { t } = require("../localization/index.js");
  * - game_id 8: Zenless Zone Zero
  */
 
-const { setTimeout: sleep } = require("node:timers/promises");
+const requestWithEventBackoff = require("./event-rate-limit.js");
 const { buildMimoRequest } = require("./mimo-request.js");
 const { canRestoreRedemption, redeemWithRefresh } = require("./redemption-request.js");
 
@@ -83,39 +83,11 @@ module.exports = class TravelingMimo {
 
 	async #request (endpoint, options = {}) {
 		const request = buildMimoRequest(this.#gameId, endpoint, options);
-
-		// Retry logic with exponential backoff for rate limits
-		const maxRetries = 10;
-		const baseDelay = 500; // 500ms initial delay
-		const maxDelay = 30000; // 30s max delay
-
-		for (let attempt = 1; attempt <= maxRetries; attempt++) {
-			const res = await app.Got(request.profile, request.options);
-
-			// Check for rate limit errors:
-			// - retcode -500004 = VisitsTooFrequently (JSON response)
-			// - HTTP 429 = Too Many Requests
-			// - Body contains "Too Many Requests" string
-			const isRateLimited = res.body?.retcode === -500004
-				|| res.statusCode === 429
-				|| (typeof res.body === "string" && res.body.includes("Too Many Requests"));
-
-			if (isRateLimited) {
-				if (attempt === maxRetries) {
-					app.Logger.warn(`${this.#instance.fullName}:Mimo`, t `Rate limited after ${maxRetries} attempts, giving up`);
-					return res;
-				}
-
-				const maxWait = Math.min(baseDelay * 2 ** attempt, maxDelay);
-				const totalDelay = Math.floor(baseDelay + Math.random() * (maxWait - baseDelay));
-
-				app.Logger.info(`${this.#instance.fullName}:Mimo`, t `Rate limited, retrying in ${totalDelay}ms (attempt ${attempt}/${maxRetries})`);
-				await sleep(totalDelay);
-				continue;
-			}
-
-			return res;
-		}
+		return requestWithEventBackoff(
+			() => app.Got(request.profile, request.options),
+			`${this.#instance.fullName}:Mimo`,
+			10
+		);
 	}
 
 	async getGameInfo (accountData) {
