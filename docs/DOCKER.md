@@ -65,6 +65,16 @@ Choose an ACL instead if the host user also needs access. Avoid world-writable
 permissions. Use your installation's Docker access policy; Docker-group access
 is privileged and is not required when rootless Docker is configured.
 
+The Linux container uses `data/cache-writer.lock` on the bind mount, and the
+image build checks its `flock` utility.
+When moving between a direct Linux install and Docker, check that the new
+worker can open the existing `data/cache-writer.lock` for reading and writing
+and access the cache. Check permissions using the effective UID/GID on the
+mount, including any user namespace mapping. Share a data directory only
+when both environments see the same lock inode and the mount supports
+`flock` across them. Keep the lock file in place during migration and rollback.
+See [cache writer lock requirements](INSTALLATION.md#cache-writer-lock).
+
 ## Published images (after manual publication)
 
 The intended registry is `ghcr.io/ste94pz/hoyoutils`. No image availability is

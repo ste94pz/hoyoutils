@@ -67,6 +67,8 @@ cp default.config.json5 config.json5
 Edit `config.json5` using [the defaults](default.config.json5), or use
 `npm run setup:windows` / `npm run setup:linux` to open the local generator.
 Configure cookies, games and notification platforms, then run `npm start`.
+For a direct Linux installation, provide `flock` on `PATH` (for example from
+util-linux).
 Existing configurations and `data/cache.json` remain compatible. Stop the old
 worker before switching to HoYoUtils.
 

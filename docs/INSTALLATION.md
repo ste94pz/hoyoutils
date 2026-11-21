@@ -7,6 +7,8 @@
 - [Git](https://git-scm.com/downloads)
 - [Node.js](https://nodejs.org/en/) 24 LTS recommended; CI covers 22, 24 and 26.
   Node 20 retains configuration/runtime compatibility but is end-of-life.
+- Direct Linux installs require `flock` on `PATH` with support for
+  `flock -n <fd>`. The util-linux implementation supports this form.
 
 ## Installation
 
@@ -93,6 +95,7 @@ This file stores temporary data to improve performance and reduce API calls. The
 project-root/
 ├── data/
 │   ├── cache.json    # Auto-generated cache file
+│   ├── cache-writer.lock # Persistent lock file on Linux
 │   └── README.md     # Cache documentation
 ├── logs/             # Application logs (if logging is enabled)
 ├── config.json5      # Your configuration file
@@ -107,6 +110,23 @@ project-root/
 - Deleting the cache resets pending-code history, schedule choices and attempt
   protections; back it up and stop the application first
 - The `data/` directory must be writable by the application
+
+### Cache writer lock
+
+On Linux, HoYoUtils acquires an exclusive lock on `./data/cache-writer.lock`
+before loading the cache or starting jobs and account operations. A second
+worker using the same lock file, or a worker that cannot acquire the lock,
+exits with an error. The operating system releases the lock when the process
+exits, and the file stays in place for the next startup.
+
+Use a data directory on a filesystem that supports `flock` for every writer
+that can access it. The worker must be able to write to the directory and
+open the lock file for reading and writing. HoYoUtils creates the lock file
+with owner-only read/write permissions. Keep the directory protected and
+leave the lock file in place, including during upgrades and rollback.
+Replacing or removing the file during use can allow two writers to start.
+On Windows, macOS and other non-Linux runtimes, use a single worker with an
+exclusive data directory. Older versions also require exclusive access.
 
 ## Migration
 
@@ -132,6 +152,11 @@ API identifiers and cache keys are preserved. Keep config.json5, data/ and logs/
 stop the old process before starting HoYoUtils with the same accounts/cache.
 Back up those files privately before upgrading. Use `npm ci` after updating the
 source. No cache reset or config rename is required for this rebranding.
+
+When upgrading to a version with the Linux lock, disable automatic restarts
+of older workers and stop every worker using the data directory before
+backing it up. Check `flock` and permissions for the new worker, then start one
+instance. For rollback, stop all locking workers before starting an older one.
 
 See [cookie authentication](AUTHENTICATION.md), [character selection](CHARACTERS.md),
 [notifications](NOTIFICATIONS.md) and [Docker migration](DOCKER.md#migration).

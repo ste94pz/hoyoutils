@@ -87,6 +87,7 @@ test("startup waits for clients and starts only randomized primary jobs", async 
 		"./classes/command.js": { importData: () => {} },
 		"./classes/config.js": { load: () => {}, data: new Map() },
 		"./classes/got.js": { initialize: () => ({ importData: () => {} }) },
+		"./object/cache-writer-lock.js": () => events.push("cache writer lock"),
 		"./singleton/logger.js": class { info () {} },
 		"./singleton/test-notification.js": { sendTestNotifications: () => events.push("test notification") },
 		"./hoyolab-modules/template.js": {
@@ -121,7 +122,7 @@ test("startup waits for clients and starts only randomized primary jobs", async 
 		process: { hrtime: { bigint: () => 0n }, on: () => {} },
 		require: name => dependencies[name] ?? class {}
 	});
-	assert.deepEqual(events, ["cron registration", "cookie refresh", "login", "connect", "randomized start", "randomized ready", "test notification"]);
+	assert.deepEqual(events, ["cache writer lock", "cron registration", "cookie refresh", "login", "connect", "randomized start", "randomized ready", "test notification"]);
 	assert.ok(fixed.every(job => job.starts === 1));
 });
 

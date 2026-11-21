@@ -2,6 +2,8 @@ FROM node:24-alpine
 
 # Retained for dependencies or integrations that use Git.
 RUN apk add --no-cache git
+# Check that the base image supports locking an inherited descriptor.
+RUN flock -n 3 3</etc/alpine-release
 
 WORKDIR /app
 

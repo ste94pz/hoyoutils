@@ -15,6 +15,7 @@ const Platform = require("./platforms/template.js");
 const Date = require("./object/date.js");
 const Error = require("./object/error.js");
 const RegionalTaskManager = require("./object/regional-task-manager.js");
+const acquireCacheWriterLock = require("./object/cache-writer-lock.js");
 
 const config = require("./config.js");
 const { RandomizedScheduler } = require("./crons/randomized-scheduler.js");
@@ -26,6 +27,15 @@ const { RandomizedScheduler } = require("./crons/randomized-scheduler.js");
 	if (!platformsConfig || platformsConfig.length === 0) {
 		console.warn(t("No platforms configured! Exiting."));
 		process.exit(0);
+	}
+
+	try {
+		acquireCacheWriterLock();
+	}
+	catch (e) {
+		console.error(t `Cache writer lock unavailable (./data/cache-writer.lock): ${e.message}`);
+		process.exitCode = 1;
+		return;
 	}
 
 	globalThis.app = {
