@@ -1,7 +1,64 @@
 const { t } = require("../localization/index.js");
 
+const { randomUUID } = require("node:crypto");
+const fs = require("node:fs/promises");
+const { dirname } = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
 const Keyv = require("keyv");
-const { KeyvFile } = require("keyv-file");
+const { KeyvFile, defaultOpts } = require("keyv-file");
+
+class RecoverableKeyvFile extends KeyvFile {
+	#pendingSave;
+	#saveTail = Promise.resolve();
+
+	save () {
+		this.clearExpire();
+		if (!this.#pendingSave) {
+			const write = async () => {
+				await delay(defaultOpts.writeDelay);
+				// saveToDisk captures synchronously. Later mutations need the next save.
+				this.#pendingSave = undefined;
+				await this.saveToDisk();
+			};
+			this.#pendingSave = this.#saveTail.then(write, write);
+			this.#saveTail = this.#pendingSave;
+			// KeyvFile.delete discards this promise. Callers awaiting it still receive errors.
+			this.#pendingSave.catch(() => {});
+		}
+		return this.#pendingSave;
+	}
+
+	async deleteDurably (key) {
+		// KeyvFile.delete calls save synchronously and returns only the deletion result.
+		const deleted = this.delete(key);
+		if (deleted) {
+			await this.#pendingSave;
+		}
+		return deleted;
+	}
+
+	async saveToDisk () {
+		// Keep the KeyvFile snapshot format and capture it before any asynchronous work.
+		const { filename } = this._opts;
+		const data = this._opts.encode({ cache: Array.from(this._cache), lastExpire: this._lastExpire });
+		const temporary = `${filename}.${randomUUID()}.tmp`;
+		await fs.mkdir(dirname(filename), { recursive: true });
+		const file = await fs.open(temporary, "wx", 0o600);
+		try {
+			try {
+				await file.writeFile(data);
+			}
+			finally {
+				await file.close();
+			}
+			await fs.rename(temporary, filename);
+		}
+		catch (e) {
+			await fs.unlink(temporary).catch(() => {});
+			throw e;
+		}
+	}
+}
 
 const isValidInteger = (value) => {
 	if (typeof value !== "number") {
@@ -16,7 +73,7 @@ module.exports = class Cache {
 	#file;
 
 	constructor () {
-		this.#file = new KeyvFile({
+		this.#file = new RecoverableKeyvFile({
 			filename: "./data/cache.json",
 			serialize: JSON.stringify,
 			deserialize: JSON.parse
@@ -47,13 +104,8 @@ module.exports = class Cache {
 			return await this.#store.set(key, data.value, data.expiry);
 		}
 
-		const result = await this.#store.set(key, data.value);
-		if (data.durable) {
-			// A shared in-flight save may have captured its snapshot before this set.
-			// A second save after it completes includes this value before the caller proceeds.
-			await this.#file.save();
-		}
-		return result;
+		// Keyv.set already awaits the save from KeyvFile, including for durable writers.
+		return await this.#store.set(key, data.value);
 	}
 
 	async get (keyIdentifier) {
@@ -61,8 +113,11 @@ module.exports = class Cache {
 		return await this.#store.get(key);
 	}
 
-	async delete (keyIdentifier) {
+	async delete (keyIdentifier, { durable = false } = {}) {
 		const key = Cache.resolveKey(keyIdentifier);
+		if (durable) {
+			return await this.#file.deleteDurably(this.#store._getKeyPrefix(key));
+		}
 		return await this.#store.delete(key);
 	}
 

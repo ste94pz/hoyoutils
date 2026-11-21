@@ -32,6 +32,10 @@ been run for the first time.
 - Deleting the cache also removes pending reward codes. Redeem any failed reward
   codes first if you want to keep their rewards.
 - Ensure this directory has **write permissions** for the application
+- Cache updates replace `cache.json` once a complete snapshot has been written
+  to a temporary file in the same directory. An abrupt process stop can leave
+  a `cache.json.*.tmp` file. It may contain private cache data and can be
+  removed while the application is stopped.
 
 ### Troubleshooting
 
