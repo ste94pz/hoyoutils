@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHttpHarness } = require("./helpers/http.js");
+const { assertWeeklyNotesRendering } = require("./helpers/notes-command.js");
 const { notesKey, testStaminaNotesRace } = require("./helpers/notes-concurrency.js");
 const testNotesThreshold = require("./helpers/notes-threshold.js");
 const StarRail = require("../hoyolab-modules/starrail/index.js");
@@ -108,6 +109,89 @@ const assertRequest = (request, notes = false, hi3 = false, language = "en-us", 
 	});
 	assert.equal(request.headers["x-requested-with"], undefined);
 };
+
+test("Star Rail Notes preserves missing and null weekly fields and a false unlock flag", async (t) => {
+	const { game, requests, replies, writes } = await setup(t);
+	replies.push(card(), dailyNote({
+		weekly_cocoon_cnt: undefined,
+		max_rogue_score: null,
+		rogue_tourn_weekly_unlocked: false
+	}));
+	await game.login();
+	const [account] = game.accounts;
+	const expected = {
+		weeklyBoss: undefined,
+		weeklyBossLimit: 3,
+		rogueScore: 1000,
+		maxScore: null,
+		tournScore: 500,
+		tournMaxScore: 1000,
+		tournUnlocked: false
+	};
+
+	const fresh = await game.notes(account);
+	assert.equal(fresh.success, true);
+	assert.deepEqual(fresh.data.weeklies, expected);
+	assert.deepEqual(writes[0].value.weeklies, expected);
+	const cached = await game.notes(account);
+	assert.deepEqual(cached.data.weeklies, expected);
+	assert.equal(requests.length, 2);
+});
+
+for (const [name, weeklyFields, lines] of [
+	["absent pairs and unlock flag", {
+		weekly_cocoon_cnt: undefined,
+		weekly_cocoon_limit: undefined,
+		current_rogue_score: undefined,
+		max_rogue_score: undefined,
+		rogue_tourn_weekly_cur: undefined,
+		rogue_tourn_weekly_max: undefined,
+		rogue_tourn_weekly_unlocked: undefined
+	}, ["Boss: Not available", "Simulated Universe: Not available"]],
+	["partial pairs and unlocked Divergent Universe", {
+		weekly_cocoon_cnt: undefined,
+		max_rogue_score: null,
+		rogue_tourn_weekly_cur: undefined
+	}, ["Boss: Not available", "Simulated Universe: Not available", "Divergent Universe: Not available"]],
+	["explicit zero and unlocked Divergent Universe", {
+		weekly_cocoon_cnt: 0,
+		current_rogue_score: 0,
+		rogue_tourn_weekly_cur: 0
+	}, ["Boss: 0/3", "Simulated Universe: 0/14000", "Divergent Universe: 0/1000"]],
+	["explicit zero and locked Divergent Universe", {
+		weekly_cocoon_cnt: 0,
+		current_rogue_score: 0,
+		rogue_tourn_weekly_cur: 0,
+		rogue_tourn_weekly_unlocked: false
+	}, ["Boss: 0/3", "Simulated Universe: 0/14000"]]
+]) {
+	test(`Star Rail /notes renders weekly objectives with ${name} on both platforms`, async (t) => {
+		const harness = await setup(t);
+		harness.replies.push(card());
+		await harness.game.login();
+		await assertWeeklyNotesRendering(harness, dailyNote(weeklyFields), {
+			field: "Weekly Status:",
+			value: lines.join("\n"),
+			telegramSuffix: ["Weekly Status:", ...lines]
+		});
+	});
+}
+
+test("Star Rail /notes localizes mixed weekly availability on both platforms", async (t) => {
+	const { setLanguage } = require("../localization/index.js");
+	const harness = await setup(t);
+	setLanguage("it-it");
+	t.after(() => setLanguage());
+	harness.replies.push(card());
+	await harness.game.login();
+	const field = "Stato settimanale:";
+	const lines = ["Boss: 0/3", "Universo simulato: non disponibile", "Universo divergente: 500/1000"];
+	await assertWeeklyNotesRendering(harness, dailyNote({ weekly_cocoon_cnt: 0, max_rogue_score: null }), {
+		field,
+		value: lines.join("\n"),
+		telegramSuffix: [field, ...lines]
+	});
+});
 
 for (const hi3 of [false, true]) {
 	for (const language of [undefined, "it-it"]) {

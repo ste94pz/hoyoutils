@@ -1,4 +1,5 @@
 const { t } = require("../../localization/index.js");
+const readWeeklyProgress = require("../../hoyolab-modules/weekly-progress.js");
 
 const formatAttendanceRefresh = (value) => {
 	const seconds = typeof value === "number" || (typeof value === "string" && value.trim() !== "")
@@ -11,11 +12,38 @@ const formatAttendanceRefresh = (value) => {
 		: t("Not available");
 };
 
+function formatWeeklyPair (pair) {
+	return pair ? `${pair.value}/${pair.total}` : t("Not available");
+}
+
+function formatWeeklies (type, data) {
+	const progress = readWeeklyProgress(type, data) ?? {};
+	if (type === "genshin") {
+		return formatWeeklyPair(progress.resinDiscount);
+	}
+	if (type === "starrail") {
+		const lines = [
+			t `Boss: ${formatWeeklyPair(progress.boss)}`,
+			t `Simulated Universe: ${formatWeeklyPair(progress.simulatedUniverse)}`
+		];
+		if (progress.tournUnlocked === true) {
+			lines.push(t `Divergent Universe: ${formatWeeklyPair(progress.divergentUniverse)}`);
+		}
+		return lines.join("\n");
+	}
+	if (type === "nap") {
+		return [
+			t `Bounty Commission: ${formatWeeklyPair(progress.bounty)}`,
+			t `Survey Points: ${formatWeeklyPair(progress.surveyPoints)}`
+		].join("\n");
+	}
+	return "";
+}
+
 const getNotesEmbedData = async (accounts, game, platformId) => {
 	const embedData = [];
 	for (const account of accounts) {
-		const { stamina, expedition } = account;
-		if (!stamina.check && !expedition?.check) {
+		if (!account.stamina.check && !account.expedition?.check) {
 			continue;
 		}
 
@@ -25,10 +53,13 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 			continue;
 		}
 
+		const { data } = notes;
+		const { stamina, dailies, expedition } = data;
+		const weeklyStatus = formatWeeklies(platform.type, data);
+
 		if (platformId === 1) {
 			const region = app.HoyoLab.getRegion(account.region);
-			const { data } = notes;
-			const { stamina, dailies, weeklies, expedition, realm } = data;
+			const { realm } = data;
 
 			const currentStamina = Math.round(stamina.currentStamina);
 			const embed = {
@@ -70,7 +101,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					},
 					{
 						name: t("Weekly Boss:"),
-						value: `${weeklies.resinDiscount}/${weeklies.resinDiscountLimit}`,
+						value: weeklyStatus,
 						inline: true
 					},
 					{
@@ -94,8 +125,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					},
 					{
 						name: t("Weekly Status:"),
-						value: t `Boss: ${weeklies.weeklyBoss}/${weeklies.weeklyBossLimit}`
-						+ t `\nSimulated Universe: ${weeklies.rogueScore}/${weeklies.maxScore}`,
+						value: weeklyStatus,
 						inline: false
 					},
 					{
@@ -104,10 +134,6 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 						inline: true
 					}
 				);
-
-				if (weeklies.tournUnlocked) {
-					embed.fields[2].value += t `\nDivergent Universe: ${weeklies.tournScore}/${weeklies.tournMaxScore}`;
-				}
 			}
 			else if (platform.gameId === 8) {
 				embed.fields.push(
@@ -123,8 +149,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					},
 					{
 						name: t("Weeklies"),
-						value: t `Bounty Commission: ${weeklies.bounty}/${weeklies.bountyTotal}`
-						+ t `\nSurvey Points: ${weeklies.surveyPoints}/${weeklies.surveyPointsTotal}`,
+						value: weeklyStatus,
 						inline: true
 					},
 					{
@@ -138,8 +163,6 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 			embedData.push(embed);
 		}
 		else if (platformId === 2) {
-			const { data } = notes;
-			const { stamina, dailies, weeklies, expedition } = data;
 			const telegram = app.Platform.get(2);
 
 			let message = "";
@@ -156,7 +179,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					t `Dailies: ${task}/${maxTask}`,
 					t `Stored Attendance: ${storedAttendance}`,
 					t `Refresh in: ${formatAttendanceRefresh(storedAttendanceRefresh)}`,
-					t `Weekly Boss Chance Remaining: ${weeklies.resinDiscount}/${weeklies.resinDiscountLimit}`
+					t `Weekly Boss Chance Remaining: ${weeklyStatus}`
 				].join("\n");
 			}
 			else if (platform.gameId === 6) {
@@ -168,13 +191,8 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					expedition.list.map((i, idx) => t `Account ${idx + 1} - ${app.Utils.formatTime(i.remaining_time)}`).join("\n"),
 					t `Dailies: ${dailies.task}/${dailies.maxTask}`,
 					t("Weekly Status:"),
-					t `Boss: ${weeklies.weeklyBoss}/${weeklies.weeklyBossLimit}`
-					+ t `\nSimulated Universe: ${weeklies.rogueScore}/${weeklies.maxScore}`
+					weeklyStatus
 				].join("\n");
-
-				if (weeklies.tournUnlocked) {
-					message += t `\nDivergent Universe: ${weeklies.tournScore}/${weeklies.tournMaxScore}`;
-				}
 			}
 			else if (platform.gameId === 8) {
 				message = [
@@ -182,8 +200,7 @@ const getNotesEmbedData = async (accounts, game, platformId) => {
 					t `Current Stamina: ${stamina.currentStamina}/${stamina.maxStamina}`
 					+ t `\nFull in: ${app.Utils.formatTime(stamina.recoveryTime)}`,
 					t `Dailies: ${dailies.task}/${dailies.maxTask}`,
-					t `Bounty Commission: ${weeklies.bounty}/${weeklies.bountyTotal}`,
-					t `Survey Points: ${weeklies.surveyPoints}/${weeklies.surveyPointsTotal}`,
+					weeklyStatus,
 					t `Shop Status: ${t(data.shop?.state ?? "Not available")}`,
 					t `Howl Scratch Card: ${t(data.cardSign)}`
 				].join("\n");

@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHttpHarness } = require("./helpers/http.js");
+const { assertWeeklyNotesRendering } = require("./helpers/notes-command.js");
 const { createNotesConsumers, notesKey, testStaminaNotesRace } = require("./helpers/notes-concurrency.js");
 const testNotesThreshold = require("./helpers/notes-threshold.js");
 const Genshin = require("../hoyolab-modules/genshin/index.js");
@@ -159,6 +160,56 @@ for (const language of [undefined, "it-it"]) {
 		assert.equal(requests.length, 2);
 		assertRequest(requests[0], false, language);
 		assertRequest(requests[1], true, language);
+	});
+}
+
+test("Genshin Notes preserves a zero discount count and a missing or null limit", async (t) => {
+	const { game, requests, replies, writes } = await setup(t);
+	replies.push(card());
+	for (const limit of [undefined, null]) {
+		replies.push(dailyNote({ remain_resin_discount_num: 0, resin_discount_num_limit: limit }));
+	}
+	await game.login();
+	const [account] = game.accounts;
+
+	for (const limit of [undefined, null]) {
+		const expected = { resinDiscount: 0, resinDiscountLimit: limit };
+		const fresh = await game.notes(account);
+		assert.equal(fresh.success, true);
+		assert.deepEqual(fresh.data.weeklies, expected);
+		assert.deepEqual(writes.at(-1).value.weeklies, expected);
+		const requestCount = requests.length;
+		const cached = await game.notes(account);
+		assert.deepEqual(cached.data.weeklies, expected);
+		assert.equal(requests.length, requestCount);
+		await game.dataCache.invalidateCache(account);
+	}
+	assert.equal(requests.length, 3);
+});
+
+for (const [name, count, limit, value, cachedCases] of [
+	["absent pair", undefined, undefined, "Not available", [
+		{ overrides: { weeklies: undefined } },
+		{ overrides: { weeklies: null } }
+	]],
+	["partial pair", 0, undefined, "Not available"],
+	["null limit", 0, null, "Not available"],
+	["non-finite limit", 0, Infinity, "Not available"],
+	["numeric string", "0", 3, "Not available"],
+	["explicit zero", 0, 3, "0/3"]
+]) {
+	test(`Genshin /notes renders weekly discounts with ${name} on both platforms`, async (t) => {
+		const harness = await setup(t);
+		harness.replies.push(card());
+		await harness.game.login();
+		await assertWeeklyNotesRendering(harness, dailyNote({
+			remain_resin_discount_num: count,
+			resin_discount_num_limit: limit
+		}), {
+			field: "Weekly Boss:",
+			value,
+			telegramSuffix: [`Weekly Boss Chance Remaining: ${value}`]
+		}, cachedCases);
 	});
 }
 

@@ -1,6 +1,75 @@
 const { t } = require("../../localization/index.js");
+const readWeeklyProgress = require("../../hoyolab-modules/weekly-progress.js");
 
 const RegionalTaskManager = new app.RegionalTaskManager();
+
+function getObjectives (type, data) {
+	const progress = readWeeklyProgress(type, data);
+	if (!progress) {
+		return null;
+	}
+
+	const objectives = [];
+
+	if (type === "genshin") {
+		const { resinDiscount } = progress;
+		if (!resinDiscount) {
+			return null;
+		}
+		if (resinDiscount.value !== 0) {
+			objectives.push({
+				...resinDiscount,
+				label: "Resin Discount",
+				embedKey: "{0}/{1} Available",
+				telegramKey: "- **Resin Discount**: {0}/{1} Available"
+			});
+		}
+	}
+	if (type === "starrail") {
+		const { boss, simulatedUniverse, divergentUniverse, tournUnlocked } = progress;
+		if (boss && boss.value !== 0) {
+			objectives.push({
+				...boss,
+				label: "Weekly Boss",
+				embedKey: "{0}/{1} Completed",
+				telegramKey: "- **Weekly Boss**: {0}/{1} Completed"
+			});
+		}
+		if (simulatedUniverse && simulatedUniverse.value !== simulatedUniverse.total) {
+			objectives.push({
+				...simulatedUniverse,
+				label: "Simulated Universe",
+				telegramKey: "- **Simulated Universe**: {0}/{1}"
+			});
+		}
+		if (divergentUniverse && (divergentUniverse.value !== divergentUniverse.total || tournUnlocked === false)) {
+			objectives.push({
+				...divergentUniverse,
+				label: "Divergent Universe",
+				telegramKey: "- **Divergent Universe**: {0}/{1}"
+			});
+		}
+	}
+	if (type === "nap") {
+		const { bounty, surveyPoints } = progress;
+		if (bounty && bounty.value !== bounty.total) {
+			objectives.push({
+				...bounty,
+				label: "Bounty Commission",
+				telegramKey: "- **Bounty Commission**: {0}/{1}"
+			});
+		}
+		if (surveyPoints && surveyPoints.value !== surveyPoints.total) {
+			objectives.push({
+				...surveyPoints,
+				label: "Survey Points",
+				telegramKey: "- **Survey Points**: {0}/{1}"
+			});
+		}
+	}
+
+	return objectives;
+}
 
 RegionalTaskManager.registerTask("WeekliesReminder", 21, 0, async (account) => {
 	const weekliesCheck = account.weekliesCheck;
@@ -15,11 +84,20 @@ RegionalTaskManager.registerTask("WeekliesReminder", 21, 0, async (account) => {
 	}
 
 	const { data } = notes;
-	const weeklies = data.weeklies;
 
 	const platforms = app.Platform.getForAccount(account);
 	const embedPlatforms = app.Platform.getEmbedPlatforms(platforms);
 	const telegrams = platforms.filter(p => p.name === "telegram");
+	if (embedPlatforms.length === 0 && telegrams.length === 0) {
+		return;
+	}
+
+	const { type } = platform;
+	const objectives = getObjectives(type, data);
+	if (!objectives || (objectives.length === 0 && (type === "starrail" || type === "nap"))) {
+		return;
+	}
+
 	if (embedPlatforms.length > 0) {
 		const embed = {
 			color: data.assets.color,
@@ -41,69 +119,12 @@ RegionalTaskManager.registerTask("WeekliesReminder", 21, 0, async (account) => {
 			}
 		};
 
-		if (platform.type === "genshin") {
-			const resin = weeklies.resinDiscount;
-			const limit = weeklies.resinDiscountLimit;
-
-			if (resin !== 0) {
-				embed.fields.push({
-					name: t("Resin Discount"),
-					value: t `${resin}/${limit} Available`,
-					inline: true
-				});
-			}
-		}
-		if (platform.type === "starrail") {
-			const bossCompleted = (weeklies.weeklyBoss === 0);
-			const simCompleted = (weeklies.rogueScore === weeklies.maxScore);
-			const divergent = (weeklies.tournScore === weeklies.tournMaxScore && weeklies.tournUnlocked);
-			if (bossCompleted && simCompleted && divergent) {
-				return;
-			}
-
-			if (!bossCompleted) {
-				embed.fields.push({
-					name: t("Weekly Boss"),
-					value: t `${weeklies.weeklyBoss}/${weeklies.weeklyBossLimit} Completed`,
-					inline: true
-				});
-			}
-			if (!simCompleted) {
-				embed.fields.push({
-					name: t("Simulated Universe"),
-					value: `${weeklies.rogueScore}/${weeklies.maxScore}`,
-					inline: true
-				});
-			}
-			if (!divergent) {
-				embed.fields.push({
-					name: t("Divergent Universe"),
-					value: `${weeklies.tournScore}/${weeklies.tournMaxScore}`,
-					inline: true
-				});
-			}
-		}
-		if (platform.type === "nap") {
-			const bountiesCompleted = (weeklies.bounty === weeklies.bountyTotal);
-			const surveyCompleted = (weeklies.surveyPoints === weeklies.surveyPointsTotal);
-			if (bountiesCompleted && surveyCompleted) {
-				return;
-			}
-
-			if (!bountiesCompleted) {
-				embed.fields.push({
-					name: t("Bounty Commission"),
-					value: `${weeklies.bounty}/${weeklies.bountyTotal}`,
-					inline: true
-				});
-			}
-			if (!surveyCompleted) {
-				embed.fields.push({
-					name: t("Survey Points"),
-					value: `${weeklies.surveyPoints}/${weeklies.surveyPointsTotal}`,
-					inline: true
-				});
-			}
+		for (const { label, value, total, embedKey } of objectives) {
+			embed.fields.push({
+				name: t(label),
+				value: embedKey ? t(embedKey, value, total) : `${value}/${total}`,
+				inline: true
+			});
 		}
 
 		for (const destination of embedPlatforms) {
@@ -126,49 +147,9 @@ RegionalTaskManager.registerTask("WeekliesReminder", 21, 0, async (account) => {
 			t `- **Username**: ${account.nickname}`,
 			t `- **Region**: ${app.HoyoLab.getRegion(account.region)}`,
 			"",
-			t("📊 **Progress**")
+			t("📊 **Progress**"),
+			...objectives.map(({ telegramKey, value, total }) => t(telegramKey, value, total))
 		];
-
-		if (platform.type === "genshin") {
-			const resin = weeklies.resinDiscount;
-			const limit = weeklies.resinDiscountLimit;
-
-			if (resin !== 0) {
-				message.push(t `- **Resin Discount**: ${resin}/${limit} Available`);
-			}
-		}
-		if (platform.type === "starrail") {
-			const bossCompleted = (weeklies.weeklyBoss === 0);
-			const simCompleted = (weeklies.rogueScore === weeklies.maxScore);
-			const divergent = (weeklies.tournScore === weeklies.tournMaxScore && weeklies.tournUnlocked);
-			if (bossCompleted && simCompleted && divergent) {
-				return;
-			}
-
-			if (!bossCompleted) {
-				message.push(t `- **Weekly Boss**: ${weeklies.weeklyBoss}/${weeklies.weeklyBossLimit} Completed`);
-			}
-			if (!simCompleted) {
-				message.push(t `- **Simulated Universe**: ${weeklies.rogueScore}/${weeklies.maxScore}`);
-			}
-			if (!divergent) {
-				message.push(t `- **Divergent Universe**: ${weeklies.tournScore}/${weeklies.tournMaxScore}`);
-			}
-		}
-		if (platform.type === "nap") {
-			const bountiesCompleted = (weeklies.bounty === weeklies.bountyTotal);
-			const surveyCompleted = (weeklies.surveyPoints === weeklies.surveyPointsTotal);
-			if (bountiesCompleted && surveyCompleted) {
-				return;
-			}
-
-			if (!bountiesCompleted) {
-				message.push(t `- **Bounty Commission**: ${weeklies.bounty}/${weeklies.bountyTotal}`);
-			}
-			if (!surveyCompleted) {
-				message.push(t `- **Survey Points**: ${weeklies.surveyPoints}/${weeklies.surveyPointsTotal}`);
-			}
-		}
 
 		const escapedMessage = app.Utils.escapeCharacters(message.join("\n"));
 		for (const telegram of telegrams) {

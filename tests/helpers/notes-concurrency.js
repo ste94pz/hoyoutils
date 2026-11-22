@@ -19,12 +19,17 @@ const createNotesConsumers = (game, replies) => {
 	const { uid } = account;
 	app.HoyoLab = HoyoLab;
 	const manualReplies = [];
+	const telegramMessages = [];
 	const notifications = [];
 	const discord = {
 		createUserMention: () => "",
 		send: async (embed, options) => notifications.push({ embed, options })
 	};
 	app.Platform = {
+		get: id => {
+			assert.equal(id, 2);
+			return { send: async message => telegramMessages.push(message) };
+		},
 		getForAccount: () => [discord],
 		getEmbedPlatforms: platforms => platforms
 	};
@@ -32,6 +37,7 @@ const createNotesConsumers = (game, replies) => {
 		platform: { id: 1 },
 		interaction: { reply: async reply => manualReplies.push(reply) }
 	}, account.platform, uid);
+	const runManualTelegram = () => notesCommand.run({ platform: { id: 2 } }, account.platform, uid);
 	const holdReply = (reply) => {
 		const started = deferred();
 		const response = deferred();
@@ -41,7 +47,7 @@ const createNotesConsumers = (game, replies) => {
 		});
 		return { started: started.promise, release: () => response.resolve(reply) };
 	};
-	return { account, manualReplies, notifications, runManual, holdReply };
+	return { account, manualReplies, telegramMessages, notifications, runManual, runManualTelegram, holdReply };
 };
 
 const testStaminaNotesRace = (gameName, setup, card, noteWithStamina, assertNotesRequest) => {

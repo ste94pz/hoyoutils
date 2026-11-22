@@ -77,12 +77,8 @@ module.exports = class RealtimeNotes {
 			? { task: data.vitality.current ?? 0, maxTask: data.vitality.max ?? 0 }
 			: null;
 
-		const weeklies = {
-			bounty: data.bounty_commission?.num ?? 0,
-			bountyTotal: data.bounty_commission?.total ?? 0,
-			surveyPoints: data.survey_points?.num ?? 0,
-			surveyPointsTotal: data.survey_points?.total ?? 0
-		};
+		const { num: bounty, total: bountyTotal } = data.bounty_commission ?? {};
+		const { num: surveyPoints, total: surveyPointsTotal } = data.survey_points ?? {};
 
 		const ShopState = {
 			SaleStateNo: "Closed",
@@ -92,7 +88,7 @@ module.exports = class RealtimeNotes {
 
 		const shop = data.vhs_sale ? { state: ShopState[data.vhs_sale.sale_state] ?? "Unknown" } : null;
 
-		if (!stamina || !dailies || !weeklies) {
+		if (!stamina || !dailies) {
 			app.Logger.warn(`${this.#instance.fullName}:Notes`, {
 				message: t("No necessary data was received from hoyolab"),
 				args: {
@@ -110,7 +106,16 @@ module.exports = class RealtimeNotes {
 			cardSign,
 			stamina,
 			dailies,
-			weeklies,
+			weeklies: {
+				bounty: bounty ?? 0,
+				bountyTotal: bountyTotal ?? 0,
+				surveyPoints: surveyPoints ?? 0,
+				surveyPointsTotal: surveyPointsTotal ?? 0
+			},
+			weekliesPresence: {
+				bounty: Number.isFinite(bounty) && Number.isFinite(bountyTotal),
+				surveyPoints: Number.isFinite(surveyPoints) && Number.isFinite(surveyPointsTotal)
+			},
 			shop
 		};
 

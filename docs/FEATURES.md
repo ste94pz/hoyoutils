@@ -77,6 +77,10 @@ daylight-saving changes.
   - **Traveling Mimo**: Automatically complete Mimo tasks, claim points, and
     exchange for Polychrome.
 
+On Discord and Telegram, `/notes` shows **Not available** for weekly
+objectives with incomplete data and displays confirmed zero values.
+
 Weekly reminders only run for Genshin Impact, Honkai: Star Rail, and Zenless
-Zone Zero. For Zenless, set `weekliesCheck` to `false` on the account to
-disable weekly reminders. Omitting the setting keeps them enabled.
+Zone Zero. Reminders omit objectives when the game data is incomplete. For
+Zenless, set `weekliesCheck` to `false` on the account to disable weekly
+reminders. Omitting the setting keeps them enabled.

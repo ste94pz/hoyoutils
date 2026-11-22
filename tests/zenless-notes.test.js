@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHttpHarness } = require("./helpers/http.js");
+const { assertWeeklyNotesRendering } = require("./helpers/notes-command.js");
 const { createNotesConsumers, notesKey, testStaminaNotesRace } = require("./helpers/notes-concurrency.js");
 const testNotesThreshold = require("./helpers/notes-threshold.js");
 const shopStatusCron = require("../crons/shop-status/index.js");
@@ -129,10 +130,11 @@ for (const language of [undefined, "it-it"]) {
 				stamina: { currentStamina: 40, maxStamina: 240, recoveryTime: 72000 },
 				dailies: { task: 200, maxTask: 400 },
 				weeklies: { bounty: 0, bountyTotal: 0, surveyPoints: 0, surveyPointsTotal: 0 },
+				weekliesPresence: { bounty: false, surveyPoints: false },
 				shop: { state: "Open" },
 				assets: { ...game.config.assets, logo: role.logo, color: 0xFF8300 }
 			} });
-		const { cardSign, stamina, dailies, weeklies, shop } = result.data;
+		const { cardSign, stamina, dailies, weeklies, weekliesPresence, shop } = result.data;
 		assert.deepEqual(writes, [{
 			key: notesKey(account),
 			expiry: 3600000,
@@ -145,6 +147,7 @@ for (const language of [undefined, "it-it"]) {
 				stamina,
 				dailies,
 				weeklies,
+				weekliesPresence,
 				shop
 			}
 		}]);
@@ -166,10 +169,12 @@ test("discovery preserves the TW/HK/MO timezone mapping", async (t) => {
 	assert.equal(game.accounts[0].timezone, "SEA");
 });
 
-for (const weekliesCheck of [false, true, undefined]) {
-	test(`weekly reminders respect the Zenless account setting (${weekliesCheck ?? "omitted"})`, async (t) => {
+for (const [weekliesCheck, source] of [[false, "fresh"], [true, "fresh"], [undefined, "fresh"], [true, "cached"], [true, "legacy cache"]]) {
+	test(`Zenless weekly reminders use complete pairs (${weekliesCheck ?? "omitted"}, ${source})`, async (t) => {
 		const accountOptions = weekliesCheck === undefined ? {} : { weekliesCheck };
-		const { game, requests, replies, logs } = await setup(t, undefined, cookie, accountOptions);
+		const { game, requests, replies, logs, cache } = await setup(t, undefined, cookie, accountOptions);
+		const legacy = source === "legacy cache";
+		const prefetch = source !== "fresh";
 		app.HoyoLab = HoyoLab;
 		app.Date = HoyoDate;
 		const timers = [];
@@ -193,27 +198,42 @@ for (const weekliesCheck of [false, true, undefined]) {
 		t.after(() => delete require.cache[cronPath]);
 		const cron = require(cronPath);
 		replies.push(card(), dailyNote({
-			bounty_commission: { num: 2, total: 3 },
-			survey_points: { num: 100, total: 8000 }
+			bounty_commission: { num: 0, total: 3 },
+			survey_points: { num: legacy ? 100 : null, total: 8000 }
 		}));
 
 		await game.login();
+		const [account] = game.accounts;
+		if (prefetch) {
+			assert.equal((await game.notes(account)).success, true);
+			const key = notesKey(account);
+			const snapshot = JSON.parse(JSON.stringify(cache.get(key)));
+			if (legacy) {
+				delete snapshot.weekliesPresence;
+			}
+			cache.set(key, snapshot);
+		}
 		await cron.code();
 		assert.equal(timers.length, 1);
-		assert.equal(requests.length, 1);
+		assert.equal(requests.length, prefetch ? 2 : 1);
 		assertRequest(requests[0], false);
 		await timers[0]();
 
 		const expectedCalls = weekliesCheck === false ? 0 : 1;
-		assert.equal(requests.length - 1, expectedCalls, "weekly Notes requests");
+		assert.equal(requests.length, 1 + expectedCalls, "login plus at most one Notes request");
 		assert.equal(embeds.length, expectedCalls, "webhook reminders");
 		assert.equal(messages.length, expectedCalls, "Telegram reminders");
-		assert.equal(game.accounts[0].weekliesCheck, weekliesCheck);
+		assert.equal(account.weekliesCheck, weekliesCheck);
 		assert.equal(logs.some(([, message]) => message === "Reminder failed; waiting for the next window"), false);
 		if (expectedCalls) {
 			assertRequest(requests[1], true);
 			assert.equal(embeds[0][1].notificationType, "weeklies");
-			assert.match(messages[0], /100\/8000/);
+			const [name, value, absent] = legacy
+				? ["Survey Points", "100/8000", "Bounty Commission"]
+				: ["Bounty Commission", "0/3", "Survey Points"];
+			assert.deepEqual(embeds[0][0].fields.slice(3), [{ name, value, inline: true }]);
+			assert.ok(messages[0].includes(`**${name}**: ${value}`));
+			assert.ok(!messages[0].includes(absent));
 		}
 	});
 }
@@ -326,6 +346,89 @@ test("Notes preserves a missing shop in the fresh response and cache hit", async
 	assertRequest(requests[1], true);
 });
 
+test("Zenless Notes preserves weekly pair presence while keeping zero defaults for display", async (t) => {
+	const { game, replies, requests, writes, cache } = await setup(t);
+	replies.push(card(), dailyNote({
+		bounty_commission: { total: 3 },
+		survey_points: undefined
+	}), dailyNote({
+		bounty_commission: { num: 0, total: 3 },
+		survey_points: { num: 0, total: 0 }
+	}));
+	await game.login();
+	const [account] = game.accounts;
+	const expected = { bounty: 0, bountyTotal: 3, surveyPoints: 0, surveyPointsTotal: 0 };
+
+	for (const [fetchCount, present] of [[2, false], [3, true]]) {
+		const expectedPresence = { bounty: present, surveyPoints: present };
+		const fresh = await game.notes(account);
+		assert.equal(fresh.success, true);
+		assert.deepEqual(fresh.data.weeklies, expected);
+		assert.deepEqual(fresh.data.weekliesPresence, expectedPresence);
+		const { key, value } = writes.at(-1);
+		assert.deepEqual(value.weeklies, expected);
+		assert.deepEqual(value.weekliesPresence, expectedPresence);
+		cache.set(key, JSON.parse(JSON.stringify(value)));
+		const cached = await game.notes(account);
+		assert.deepEqual(cached.data.weeklies, expected);
+		assert.deepEqual(cached.data.weekliesPresence, expectedPresence);
+		assert.equal(requests.length, fetchCount);
+		await game.dataCache.invalidateCache(account);
+	}
+});
+
+for (const [name, weeklyFields, lines] of [
+	["absent or null pairs", {
+		survey_points: undefined
+	}, ["Bounty Commission: Not available", "Survey Points: Not available"]],
+	["partial pairs", {
+		bounty_commission: { total: 3 },
+		survey_points: { num: 0, total: null }
+	}, ["Bounty Commission: Not available", "Survey Points: Not available"]],
+	["explicit zero", {
+		bounty_commission: { num: 0, total: 3 },
+		survey_points: { num: 0, total: 0 }
+	}, ["Bounty Commission: 0/3", "Survey Points: 0/0"]]
+]) {
+	test(`Zenless /notes renders weekly objectives with ${name} on both platforms`, async (t) => {
+		const harness = await setup(t);
+		harness.replies.push(card());
+		await harness.game.login();
+		await assertWeeklyNotesRendering(harness, dailyNote(weeklyFields), {
+			field: "Weeklies",
+			value: lines.join("\n"),
+			telegramSuffix: [...lines, "Shop Status: Open", "Howl Scratch Card: Completed"]
+		});
+	});
+}
+
+test("Zenless /notes keeps nonzero pairs in snapshots without presence markers", async (t) => {
+	const harness = await setup(t);
+	harness.replies.push(card());
+	await harness.game.login();
+	const expected = (bounty, surveyPoints) => {
+		const lines = [`Bounty Commission: ${bounty}`, `Survey Points: ${surveyPoints}`];
+		return {
+			field: "Weeklies",
+			value: lines.join("\n"),
+			telegramSuffix: [...lines, "Shop Status: Open", "Howl Scratch Card: Completed"]
+		};
+	};
+	await assertWeeklyNotesRendering(harness, dailyNote({
+		bounty_commission: { num: 0, total: 3 },
+		survey_points: { num: 100, total: 8000 }
+	}), expected("0/3", "100/8000"), [
+		{
+			overrides: { weekliesPresence: undefined },
+			output: expected("Not available", "100/8000")
+		},
+		{
+			overrides: { weekliesPresence: undefined, weeklies: { bounty: 2, bountyTotal: 3, surveyPoints: 100, surveyPointsTotal: 0 } },
+			output: expected("2/3", "Not available")
+		}
+	]);
+});
+
 test("Notes preserves populated weekly totals and scratch card/shop states", async (t) => {
 	const { game, replies } = await setup(t);
 	replies.push(card(), dailyNote({
@@ -365,13 +468,13 @@ for (const [platformId, shopState] of [[1, "Open"], [2, "Open"], [1, "Not availa
 			assert.equal(embed.color, 0xFF8300);
 			assert.match(embed.fields[0].value, /^40\/240/);
 			assert.equal(embed.fields.find(field => field.name === "Dailies").value, "200/400");
-			assert.equal(embed.fields.find(field => field.name === "Weeklies").value, "Bounty Commission: 0/0\nSurvey Points: 0/0");
+			assert.equal(embed.fields.find(field => field.name === "Weeklies").value, "Bounty Commission: Not available\nSurvey Points: Not available");
 			assert.equal(embed.fields.find(field => field.name === "Shop Status").value, shopState);
 			assert.equal(embed.fields.find(field => field.name === "Scratch Card").value, "Completed");
 		}
 		else {
 			assert.match(sent[0], /Current Stamina: 40\/240/);
-			assert.match(sent[0], /Dailies: 200\/400\nBounty Commission: 0\/0\nSurvey Points: 0\/0/);
+			assert.match(sent[0], /Dailies: 200\/400\nBounty Commission: Not available\nSurvey Points: Not available/);
 			assert.ok(sent[0].endsWith(`\nShop Status: ${shopState}\nHowl Scratch Card: Completed`));
 		}
 		assert.equal(requests.length, 2);
