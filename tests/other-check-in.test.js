@@ -75,7 +75,11 @@ for (const [folder, platform, route, signgame, actId] of games) {
 	for (const language of [undefined, "it-it"]) {
 		test(`${folder}: request contract and synthetic success (${language ?? "default"})`, async (t) => {
 			const { game, requests, replies } = await setup(t, language);
-			replies.push(info(), home(), { body: { retcode: 0, data: {} } });
+			const initialInfo = info();
+			if (folder === "termis") {
+				delete initialInfo.body.data.today;
+			}
+			replies.push(initialInfo, home(), { body: { retcode: 0, data: {} } });
 			if (confirmedGames.has(folder)) {
 				replies.push(info(true, 2));
 			}
@@ -107,6 +111,7 @@ for (const [folder, platform, route, signgame, actId] of games) {
 	for (const stage of ["info", "home", "sign"]) {
 		for (const [kind, response, reason] of [
 			["no-character retcode", { body: { retcode: -10002, message: "Synthetic missing character", data: null } }, "Synthetic missing character"],
+			["retcode without a message", { body: { retcode: -1, message: "" } }, "retcode -1"],
 			["HTTP failure", { statusCode: 403 }, "HTTP 403"]
 		]) {
 			test(`${folder}: ${stage} ${kind} produces no success`, async (t) => {
@@ -132,10 +137,35 @@ for (const [folder, platform, route, signgame, actId] of games) {
 					assets: { ...game.config.assets, logo: undefined, color: undefined }
 				}]);
 				assertRequests(requests, paths);
-				assert.equal(JSON.stringify(logs).includes("Today's Reward"), false);
+				const context = stage === "sign" && (folder === "starrail" || folder === "termis")
+					? game.name
+					: game.fullName;
+				const message = {
+					info: response.statusCode ? "Failed to get sign info" : "Info returned non-zero retcode",
+					home: "Failed to get awards data",
+					sign: "Failed to sign in"
+				}[stage];
+				assert.deepEqual(logs.at(-1), [context, {
+					message,
+					args: { httpStatus: response.statusCode ?? 200, retcode: response.body?.retcode ?? 0 }
+				}]);
+				assert.doesNotMatch(JSON.stringify(logs), /Synthetic missing character|Today's Reward/);
 			});
 		}
 	}
+
+	test(`${folder}: empty awards rejection excludes the response payload`, async t => {
+		const { game, requests, replies } = await setup(t);
+		app.Error = require("../object/error.js");
+		replies.push(info(), { body: { retcode: 0, message: "synthetic-secret", data: { awards: [], uid: "synthetic-role" } } });
+		await assert.rejects(() => game.checkIn(), error => {
+			assert.match(error.message, /No awards data available/);
+			assert.doesNotMatch(error.message, /synthetic-secret|synthetic-role/);
+			assert.deepEqual(error.args, { httpStatus: 200, retcode: 0 });
+			return true;
+		});
+		assertRequests(requests, ["info", "home"]);
+	});
 
 	test(`${folder}: no active accounts makes no requests`, async (t) => {
 		const { game, requests } = await setup(t);
@@ -149,6 +179,7 @@ for (const [folder, platform, route, signgame, actId] of games) {
 			["unsigned state", info(false, 1)],
 			["different date", { body: { retcode: 0, data: { is_sign: true, total_sign_day: 2, today: "2026-09-17" } } }],
 			["malformed state", { body: { retcode: 0, data: { is_sign: "true", total_sign_day: 2, today: "2026-09-16" } } }],
+			["missing data", { body: { retcode: 0 } }],
 			["API failure", { body: { retcode: -1, data: null } }]
 		]) {
 			test(`${folder}: confirmation ${name} does not report success`, async (t) => {

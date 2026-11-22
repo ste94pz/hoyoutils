@@ -5,9 +5,22 @@ const os = require("node:os");
 const path = require("node:path");
 const util = require("node:util");
 const redactHttp = require("../object/redact-http.js");
+const getHttpResponseDiagnostic = require("../hoyolab-modules/http-response-diagnostic.js");
 const { createHttpHarness } = require("./helpers/http.js");
 
 const telegramUrl = "https://api.telegram.org/bot123:synthetic-secret/getUpdates";
+
+test("HTTP response diagnostics keep only integer status and retcode", () => {
+	assert.deepEqual(getHttpResponseDiagnostic({
+		statusCode: 503,
+		body: { retcode: -100, message: "ltoken_v2=synthetic-secret", data: { uid: "synthetic-role" } }
+	}), { httpStatus: 503, retcode: -100 });
+	for (const body of [undefined, null, "synthetic-secret", { retcode: "synthetic-retcode" }]) {
+		assert.deepEqual(getHttpResponseDiagnostic({ statusCode: 502, body }), { httpStatus: 502, retcode: undefined });
+	}
+	assert.deepEqual(getHttpResponseDiagnostic({ statusCode: "synthetic-status", body: { retcode: 0 } }),
+		{ httpStatus: undefined, retcode: 0 });
+});
 
 test("diagnostic URL redaction preserves routing while removing credentials", () => {
 	const cases = [

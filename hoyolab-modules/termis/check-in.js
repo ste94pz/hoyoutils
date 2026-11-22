@@ -1,263 +1,48 @@
 const { t } = require("../../localization/index.js");
+const { readSignResponse, readSignInfoResponse, readAwardsResponse } = require("../check-in-response.js");
+const { requestCheckIn, getCheckInAward, createCheckInResultBuilder } = require("../check-in.js");
 const descriptor = require("./check-in-descriptor.js");
 
-module.exports = class CheckIn {
-	/** @type {import("../template")} */
-	#instance;
-	#logo;
-	#color;
-
-	constructor (instance, options = {}) {
-		this.#instance = instance;
-		this.#logo = options.logo;
-		this.#color = options.color;
+module.exports = async function runThemisCheckIn (game) {
+	const accounts = game.accounts;
+	if (accounts.length === 0) {
+		app.Logger.warn(t("No active accounts found for Tears of Themis"));
+		return;
 	}
 
-	async checkAndExecute () {
-		const accounts = this.#instance.accounts;
-		if (accounts.length === 0) {
-			app.Logger.warn(t("No active accounts found for Tears of Themis"));
-			return;
+	const results = [];
+	const buildResult = createCheckInResultBuilder(game);
+	const context = `${game.fullName}:CheckIn`;
+	for (const account of accounts) {
+		const info = readSignInfoResponse(await requestCheckIn(game, descriptor, "info", account.cookie), game.fullName, { validateState: false });
+		if (!info.success) {
+			results.push(buildResult(account, { failed: true, result: info.reason }, "Global"));
+			continue;
 		}
 
-		const results = [];
-		for (const account of accounts) {
-			const info = await this.#getSignInfo(account.cookie);
-			if (!info.success) {
-				results.push(this.#failure(account, info.reason));
-				continue;
-			}
-
-			const awardsData = await this.#getAwardsData(account.cookie);
-			if (!awardsData.success) {
-				results.push(this.#failure(account, awardsData.reason));
-				continue;
-			}
-
-			const awards = awardsData.data;
-			const data = {
-				total: info.data.total,
-				today: info.data.today,
-				isSigned: info.data.issign
-			};
-
-			const totalSigned = data.isSigned ? data.total - 1 : data.total;
-			const awardObject = {
-				name: awards[totalSigned].name,
-				count: awards[totalSigned].cnt,
-				icon: awards[totalSigned].icon
-			};
-
-			if (data.isSigned) {
-				app.Logger.info(`${this.#instance.fullName}:CheckIn`, t `Already signed in today`);
-
-				results.push({
-					uid: account.uid,
-					platform: this.#instance.name,
-					rank: account.level,
-					username: account.nickname,
-					region: "Global",
-					total: data.total,
-					result: this.#instance.config.signedMessage,
-					assets: {
-						...this.#instance.config.assets,
-						logo: this.#logo,
-						color: this.#color
-					},
-					award: awardObject
-				});
-				continue;
-			}
-
-			const sign = await this.#sign(account.cookie);
-			if (!sign.success) {
-				results.push(this.#failure(account, sign.reason));
-				continue;
-			}
-
-			app.Logger.info(`${this.#instance.fullName}:CheckIn`, t `Today's Reward: ${awardObject.name} x${awardObject.count}`);
-
-			results.push({
-				uid: account.uid,
-				platform: this.#instance.name,
-				rank: account.level,
-				username: account.nickname,
-				region: "Global",
-				total: data.total + 1,
-				result: this.#instance.config.successMessage,
-				assets: {
-					...this.#instance.config.assets,
-					logo: this.#logo,
-					color: this.#color
-				},
-				award: awardObject
-			});
+		const awards = readAwardsResponse(await requestCheckIn(game, descriptor, "home", account.cookie), game.fullName);
+		if (!awards.success) {
+			results.push(buildResult(account, { failed: true, result: awards.reason }, "Global"));
+			continue;
 		}
 
-		return results;
+		const state = info.data;
+		const award = getCheckInAward(awards.data, state);
+		if (state.issign) {
+			app.Logger.info(context, t `Already signed in today`);
+			results.push(buildResult(account, { total: state.total, result: game.config.signedMessage, award }, "Global"));
+			continue;
+		}
+
+		const sign = readSignResponse(await requestCheckIn(game, descriptor, "sign", account.cookie), game.name);
+		if (!sign.success) {
+			results.push(buildResult(account, { failed: true, result: sign.reason }, "Global"));
+			continue;
+		}
+
+		app.Logger.info(context, t `Today's Reward: ${award.name} x${award.count}`);
+		results.push(buildResult(account, { total: state.total + 1, result: game.config.successMessage, award }, "Global"));
 	}
 
-	#failure (account, reason) {
-		return {
-			failed: true,
-			uid: account.uid,
-			platform: this.#instance.name,
-			rank: account.level,
-			username: account.nickname,
-			region: "Global",
-			result: reason ?? t("Unknown error"),
-			assets: {
-				...this.#instance.config.assets,
-				logo: this.#logo,
-				color: this.#color
-			}
-		};
-	}
-
-	async #sign (cookieData) {
-		const options = descriptor.signOptions(this.#instance.config.ACT_ID);
-		const res = await app.Got(descriptor.profile, {
-			...options,
-			url: this.#instance.config.url.sign,
-			responseType: "json",
-			headers: { ...options.headers, Cookie: cookieData }
-		});
-
-		if (res.statusCode !== 200) {
-			app.Logger.log(`${this.#instance.name}`, {
-				message: t("Failed to sign in"),
-				args: {
-					status: res.statusCode,
-					body: res.body
-				}
-			});
-
-			return {
-				success: false,
-				reason: `HTTP ${res.statusCode}`
-			};
-		}
-		if (res.body.retcode !== 0) {
-			app.Logger.log(`${this.#instance.name}`, {
-				message: t("Failed to sign in"),
-				args: {
-					status: res.body.retcode,
-					body: res.body
-				}
-			});
-
-			return {
-				success: false,
-				reason: res.body.message || `retcode ${res.body.retcode}`
-			};
-		}
-
-		return {
-			success: true
-		};
-	}
-
-	async #getSignInfo (cookieData) {
-		const options = descriptor.readOptions(this.#instance.config.ACT_ID);
-		const res = await app.Got(descriptor.profile, {
-			...options,
-			url: this.#instance.config.url.info,
-			responseType: "json",
-			headers: { ...options.headers, Cookie: cookieData }
-		});
-
-		if (res.statusCode !== 200) {
-			app.Logger.log(this.#instance.fullName, {
-				message: t("Failed to get sign info"),
-				args: {
-					status: res.statusCode,
-					body: res.body
-				}
-			});
-
-			return {
-				success: false,
-				reason: `HTTP ${res.statusCode}`
-			};
-		}
-		if (res.body.retcode !== 0) {
-			app.Logger.log(this.#instance.fullName, {
-				message: t("Info returned non-zero retcode"),
-				args: {
-					status: res.body.retcode,
-					body: res.body
-				}
-			});
-
-			return {
-				success: false,
-				reason: res.body.message || `retcode ${res.body.retcode}`
-			};
-		}
-
-		const data = res.body.data;
-		return {
-			success: true,
-			data: {
-				total: data.total_sign_day,
-				today: data.today,
-				issign: data.is_sign
-			}
-		};
-	}
-
-	async #getAwardsData (cookieData) {
-		const options = descriptor.readOptions(this.#instance.config.ACT_ID);
-		const res = await app.Got(descriptor.profile, {
-			...options,
-			url: this.#instance.config.url.home,
-			responseType: "json",
-			headers: { ...options.headers, Cookie: cookieData }
-		});
-
-		if (res.statusCode !== 200) {
-			app.Logger.log(this.#instance.fullName, {
-				message: t("Failed to get awards data"),
-				args: {
-					status: res.statusCode,
-					body: res.body
-				}
-			});
-
-			return {
-				success: false,
-				reason: `HTTP ${res.statusCode}`
-			};
-		}
-		if (res.body.retcode !== 0) {
-			app.Logger.log(this.#instance.fullName, {
-				message: t("Failed to get awards data"),
-				args: {
-					status: res.body.retcode,
-					body: res.body
-				}
-			});
-
-			return {
-				success: false,
-				reason: res.body.message || `retcode ${res.body.retcode}`
-			};
-		}
-
-		const data = res.body.data;
-		if (data.awards.length === 0) {
-			throw new app.Error({
-				message: t("No awards data available (?)"),
-				args: {
-					platform: this.#instance.name,
-					body: res.body
-				}
-			});
-		}
-
-		return {
-			success: true,
-			data: data.awards
-		};
-	}
+	return results;
 };

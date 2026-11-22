@@ -89,7 +89,7 @@ test("already signed on the final reward day skips the claim and returns today's
 });
 
 for (const [name, response, reason] of [
-	["claim retcode", { body: { retcode: -10002 } }, "retcode -10002"],
+	["claim retcode", { body: { retcode: -10002, data: { uid: "synthetic-secret" } } }, "retcode -10002"],
 	["claim HTTP error", { statusCode: 403 }, "HTTP 403"]
 ]) {
 	test(`${name} does not produce success or request confirmation`, async (t) => {
@@ -106,7 +106,11 @@ for (const [name, response, reason] of [
 			assets: { ...game.config.assets, logo: undefined, color: undefined }
 		}]);
 		assertRequests(requests, ["info", "home", "sign"]);
-		assert.equal(JSON.stringify(logs).includes("Today's Reward"), false);
+		assert.deepEqual(logs.at(-1), ["genshin", {
+			message: "Failed to sign in",
+			args: { httpStatus: response.statusCode ?? 200, retcode: response.body?.retcode ?? 0 }
+		}]);
+		assert.doesNotMatch(JSON.stringify(logs), /synthetic-secret|Today's Reward/);
 	});
 }
 
@@ -142,7 +146,24 @@ test("failed pre-check does not attempt the claim", async (t) => {
 		assets: { ...game.config.assets, logo: undefined, color: undefined }
 	}]);
 	assertRequests(requests, ["info"]);
+	assert.deepEqual(logs.at(-1), [game.fullName, {
+		message: "Info returned non-zero retcode",
+		args: { httpStatus: 200, retcode: -1 }
+	}]);
 	assert.equal(JSON.stringify(logs).includes("Today's Reward"), false);
+});
+
+test("Genshin stops before signing when the awards request fails", async t => {
+	const { game, requests, replies, logs } = await setup(t);
+	replies.push(info(), { statusCode: 503, body: { retcode: -1, message: "Synthetic awards failure" } });
+	const [result] = await game.checkIn();
+	assert.equal(result.failed, true);
+	assert.equal(result.result, "HTTP 503");
+	assertRequests(requests, ["info", "home"]);
+	assert.deepEqual(logs.at(-1), [game.fullName, {
+		message: "Failed to get awards data",
+		args: { httpStatus: 503, retcode: -1 }
+	}]);
 });
 
 test("a later invocation rechecks a claim whose confirmation failed without claiming twice", async (t) => {
@@ -152,4 +173,26 @@ test("a later invocation rechecks a claim whose confirmation failed without clai
 	const [result] = await game.checkIn();
 	assert.equal(result.result, game.config.signedMessage);
 	assertRequests(requests, ["info", "home", "sign", "info", "info", "home"]);
+});
+
+test("an unconfirmed account is omitted and the remaining accounts are processed in order", async t => {
+	const { game, requests, replies, logs } = await setup(t);
+	for (const uid of ["failed-role", "signed-role"]) {
+		game.accounts.push({ ...game.accounts[0], uid });
+	}
+	replies.push(info(), home(), claim(), info(), { statusCode: 403 }, info(true, 2), home());
+	const results = await game.checkIn();
+	assert.deepEqual(results.map(({ uid, failed, result }) => [uid, failed, result]), [
+		["failed-role", true, "HTTP 403"],
+		["signed-role", undefined, game.config.signedMessage]
+	]);
+	assert.ok(logs.some(args => args[0] === `${game.fullName}:CheckIn` && args[1] === "Check-in could not be confirmed for today"));
+	assertRequests(requests, ["info", "home", "sign", "info", "info", "info", "home"]);
+});
+
+test("a nonempty awards catalog missing today's reward rejects before signing", async t => {
+	const { game, requests, replies } = await setup(t);
+	replies.push(info(false, 2), home());
+	await assert.rejects(() => game.checkIn(), TypeError);
+	assertRequests(requests, ["info", "home"]);
 });

@@ -1,4 +1,5 @@
 const { t } = require("../../localization/index.js");
+const { buildCheckInFields, buildCheckInText } = require("../../hoyolab-modules/check-in-notification.js");
 
 module.exports = {
 	name: "checkin",
@@ -90,39 +91,23 @@ module.exports = {
 		}
 
 		if (platform.id === 1) {
-			const embeds = results.map((message, i) => {
-				let fields = [
-					{ name: "UID", value: message.uid, inline: true },
-					{ name: t("Username"), value: message.username, inline: true },
-					{ name: t("Region"), value: message.region, inline: true },
-					{ name: t("Rank"), value: message.rank, inline: true },
-					{ name: t("Today's Reward"), value: `${message.award.name} x${message.award.count}`, inline: true },
-					{ name: t("Total Sign-ins"), value: message.total, inline: true },
-					{ name: t("Result"), value: message.result, inline: true }
-				];
-
-				if (message.platform === "tot") {
-					fields = fields.filter(f => f.name !== t("Username") && f.name !== t("Rank"));
+			const embeds = results.map((message, i) => ({
+				color: message.assets.color,
+				title: message.assets.game,
+				author: {
+					name: message.assets.author,
+					icon_url: message.assets.logo
+				},
+				thumbnail: {
+					url: message.award.icon
+				},
+				fields: buildCheckInFields(message),
+				timestamp: new Date(),
+				footer: {
+					text: t `Manual Check-In (${i + 1}/${results.length})`,
+					icon_url: message.assets.logo
 				}
-
-				return {
-					color: message.assets.color,
-					title: message.assets.game,
-					author: {
-						name: message.assets.author,
-						icon_url: message.assets.logo
-					},
-					thumbnail: {
-						url: message.award.icon
-					},
-					fields,
-					timestamp: new Date(),
-					footer: {
-						text: t `Manual Check-In (${i + 1}/${results.length})`,
-						icon_url: message.assets.logo
-					}
-				};
-			});
+			}));
 
 			if (errors.length > 0) {
 				embeds.push({
@@ -152,16 +137,7 @@ module.exports = {
 			const telegram = app.Platform.get(2);
 			if (telegram) {
 				for (const message of results) {
-					const messageText = [
-						t `🎮 **${message.assets.game}** Manual Check-In`,
-						`🆔 **(${message.uid})** ${message.username}`,
-						t `🌍 **Region:** ${message.region}`,
-						t `🏆 **Rank:** ${message.rank}`,
-						t `🎁 **Today's Reward:** ${message.award.name} x${message.award.count}`,
-						t `📅 **Total Sign-ins:** ${message.total}`,
-						t `📝 **Result:** ${message.result}`
-					].join("\n");
-
+					const messageText = buildCheckInText(message, t `🎮 **${message.assets.game}** Manual Check-In`);
 					const escapedMessage = app.Utils.escapeCharacters(messageText);
 					await telegram.send(escapedMessage);
 				}

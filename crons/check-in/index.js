@@ -1,4 +1,5 @@
 const { t } = require("../../localization/index.js");
+const { buildCheckInFields, buildCheckInText } = require("../../hoyolab-modules/check-in-notification.js");
 
 const NOTIFICATION_MODES = ["all", "failures", "none"];
 
@@ -50,27 +51,6 @@ module.exports = {
 			const account = app.HoyoLab.getAccountById(message.uid);
 			const platforms = app.Platform.getForAccount(account);
 
-			let fields = message.failed
-				? [
-					{ name: "UID", value: message.uid, inline: true },
-					{ name: t("Username"), value: message.username, inline: true },
-					{ name: t("Region"), value: message.region, inline: true },
-					{ name: t("Result"), value: message.result, inline: false }
-				]
-				: [
-					{ name: "UID", value: message.uid, inline: true },
-					{ name: t("Username"), value: message.username, inline: true },
-					{ name: t("Region"), value: message.region, inline: true },
-					{ name: t("Rank"), value: message.rank, inline: true },
-					{ name: t("Today's Reward"), value: `${message.award.name} x${message.award.count}`, inline: true },
-					{ name: t("Total Sign-ins"), value: message.total, inline: true },
-					{ name: t("Result"), value: message.result, inline: true }
-				];
-
-			if (message.platform === "tot") {
-				fields = fields.filter(i => i.name !== t("Username") && i.name !== t("Rank"));
-			}
-
 			const embed = {
 				color: message.failed ? 0xFF0000 : message.assets.color,
 				title: message.failed ? t `❌ ${message.assets.game} Check-In Failed` : message.assets.game,
@@ -79,7 +59,7 @@ module.exports = {
 					icon_url: message.assets.logo
 				},
 				...(!message.failed && { thumbnail: { url: message.award.icon } }),
-				fields,
+				fields: buildCheckInFields(message),
 				timestamp: new Date(),
 				footer: {
 					text: t `HoYoUtils Check-In (${i + 1}/${notifications.length}) Executed`,
@@ -95,23 +75,10 @@ module.exports = {
 				});
 			}
 
-			const messageText = message.failed
-				? [
-					t `❌ **${message.assets.game}** Check-In Failed`,
-					`🆔 **(${message.uid})** ${message.username}`,
-					t `🌍 **Region:** ${message.region}`,
-					t `📝 **Result:** ${message.result}`
-				].join("\n")
-				: [
-					t `🎮 **${message.assets.game}** Daily Check-In`,
-					`🆔 **(${message.uid})** ${message.username}`,
-					t `🌍 **Region:** ${message.region}`,
-					t `🏆 **Rank:** ${message.rank}`,
-					t `🎁 **Today's Reward:** ${message.award.name} x${message.award.count}`,
-					t `📅 **Total Sign-ins:** ${message.total}`,
-					t `📝 **Result:** ${message.result}`
-				].join("\n");
-
+			const title = message.failed
+				? t `❌ **${message.assets.game}** Check-In Failed`
+				: t `🎮 **${message.assets.game}** Daily Check-In`;
+			const messageText = buildCheckInText(message, title);
 			const escapedMessage = app.Utils.escapeCharacters(messageText);
 			for (const telegram of platforms.filter(p => p.name === "telegram")) {
 				await telegram.send(escapedMessage);

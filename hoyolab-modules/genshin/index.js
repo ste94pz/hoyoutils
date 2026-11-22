@@ -1,7 +1,7 @@
 const { selectCharacter } = require("../character-selection.js");
 const { t } = require("../../localization/index.js");
 
-const CheckIn = require("./check-in.js");
+const { runCheckIn } = require("../check-in.js");
 const checkInDescriptor = require("./check-in-descriptor.js");
 const Diary = require("./diary.js");
 const Notes = require("./notes.js");
@@ -175,13 +175,8 @@ module.exports = class Genshin extends require("../template.js") {
 	get logo () { return this.#logo; }
 	get color () { return this.#color; }
 
-	async checkIn (accountData) {
-		const ci = new CheckIn(this, {
-			logo: this.#logo,
-			color: this.#color
-		});
-
-		return await ci.checkAndExecute(accountData);
+	async checkIn () {
+		return runCheckIn(this, checkInDescriptor, "No active accounts found for Genshin Impact", this.name);
 	}
 
 	async notes (accountData) {

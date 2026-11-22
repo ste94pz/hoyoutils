@@ -2,7 +2,7 @@ const { selectCharacter } = require("../character-selection.js");
 const { t } = require("../../localization/index.js");
 
 const checkInDescriptor = require("./check-in-descriptor.js");
-const CheckIn = require("./check-in.js");
+const { runCheckIn } = require("../check-in.js");
 const Notes = require("./notes.js");
 const RedeemCode = require("./redeem-code.js");
 const TravelingMimo = require("./mimo.js");
@@ -168,12 +168,7 @@ module.exports = class ZenlessZoneZero extends require("../template.js") {
 	get color () { return this.#color; }
 
 	async checkIn () {
-		const ci = new CheckIn(this, {
-			logo: this.#logo,
-			color: this.#color
-		});
-
-		return await ci.checkAndExecute();
+		return runCheckIn(this, checkInDescriptor, "No active accounts found for Zenless Zone Zero");
 	}
 
 	async notes (accountData) {

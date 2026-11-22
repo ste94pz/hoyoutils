@@ -188,7 +188,8 @@ test("Apps Script loads in any file order and uses the shared catalog", () => {
 });
 
 test("check-in keeps API locale, headers and sign body independent from software fallback", async () => {
-	const CheckIn = require("../hoyolab-modules/genshin/check-in.js");
+	const { runCheckIn } = require("../hoyolab-modules/check-in.js");
+	const descriptor = require("../hoyolab-modules/genshin/check-in-descriptor.js");
 	for (const language of [undefined, "it-it", "ja-jp"]) {
 		await Config.load({ language });
 		const requests = [];
@@ -216,7 +217,7 @@ test("check-in keeps API locale, headers and sign body independent from software
 				return { statusCode: 200, body: { retcode: 0, data } };
 			}
 		};
-		const [result] = await new CheckIn(instance).checkAndExecute();
+		const [result] = await runCheckIn(instance, descriptor, "No active accounts found for Genshin Impact", instance.name);
 		assert.equal(result.username, "Status");
 		assert.equal(result.award.name, "Daily Activity");
 		assert.equal(result.total, 1);

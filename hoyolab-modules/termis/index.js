@@ -1,6 +1,6 @@
 const { t } = require("../../localization/index.js");
 const checkInDescriptor = require("./check-in-descriptor.js");
-const CheckIn = require("./check-in.js");
+const runThemisCheckIn = require("./check-in.js");
 const { getRole, redeemCode } = require("./redemption-request.js");
 
 const DEFAULT_CONSTANTS = {
@@ -103,12 +103,7 @@ module.exports = class TearsOfThemis extends require("../template.js") {
 		return result.success ? { success: true } : { ...result, message: result.reason };
 	}
 
-	async checkIn (accountData) {
-		const ci = new CheckIn(this, {
-			logo: this.#logo,
-			color: this.#color
-		});
-
-		return await ci.checkAndExecute(accountData);
+	async checkIn () {
+		return runThemisCheckIn(this);
 	}
 };

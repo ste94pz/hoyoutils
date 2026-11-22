@@ -9,6 +9,9 @@ module.exports = {
 		home: "https://sg-act-public-api.hoyolab.com/event/sol/home",
 		sign: "https://sg-act-public-api.hoyolab.com/event/sol/sign"
 	},
+	readOptions: (actId) => ({
+		searchParams: { lang: getLanguage(), act_id: actId }
+	}),
 	signOptions: (actId) => ({
 		method: "POST",
 		searchParams: { lang: getLanguage() },
