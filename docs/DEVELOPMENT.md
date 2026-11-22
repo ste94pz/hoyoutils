@@ -30,6 +30,13 @@ compatibility changes.
 Include documentation and proportionate tests for changed behavior. If you are
 new to GitHub, see this [first pull request guide](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3#let-s-make-our-first-pull-request-).
 
+Keep characterization, implementation and regression tests for a shared
+behavior together. Review all affected callers before consolidating logic,
+preserving game-specific requests, stored data and delivery rules. Keep
+experimental fixtures separate from tests for the implementation in use.
+Before sharing a branch, group unpublished commits by functional change and
+keep the regression tests with the code they cover.
+
 Keep account cookies, tokens, exported config, logs and captures out of issues,
 PRs and commits. Retain original and third-party credits. Upstream updates are
 selected after compatibility review, rather than merged automatically.
